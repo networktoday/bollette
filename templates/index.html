@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container">
+    <div class="upload-container">
+        <h1 class="text-center mb-4">Utility Bill Analysis</h1>
+        
+        <form id="upload-form">
+            <div class="mb-3">
+                <label for="phone" class="form-label">Phone Number</label>
+                <input type="tel" class="form-control" id="phone" name="phone" 
+                       placeholder="Enter your phone number" required>
+            </div>
+
+            <div id="drop-zone" class="mb-3">
+                <i class="fas fa-cloud-upload-alt fa-3x mb-3"></i>
+                <p class="mb-2">Drag and drop your bill here</p>
+                <p class="text-muted mb-2">or</p>
+                <input type="file" id="file-input" name="file" class="d-none" 
+                       accept="image/*,application/pdf">
+                <button type="button" class="btn btn-outline-primary" 
+                        onclick="document.getElementById('file-input').click()">
+                    <i class="fas fa-folder-open me-2"></i>Choose File
+                </button>
+                {% if request.user_agent.platform == 'android' or request.user_agent.platform == 'iphone' %}
+                <button type="button" class="btn btn-outline-primary ms-2" 
+                        onclick="document.getElementById('file-input').capture = 'environment'; document.getElementById('file-input').click()">
+                    <i class="fas fa-camera me-2"></i>Take Photo
+                </button>
+                {% endif %}
+            </div>
+
+            <div id="preview" class="preview-container mb-3"></div>
+
+            <input type="hidden" id="billType" name="billType" value="">
+
+            <button type="submit" class="btn btn-primary">
+                <i class="fas fa-upload me-2"></i>Upload Bill
+            </button>
+        </form>
+    </div>
+</div>
+{% endblock %}
