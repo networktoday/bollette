@@ -9,15 +9,46 @@ from pdf2image import convert_from_path
 import threading
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 
+# Definizione delle costanti per i termini di ricerca
+GAS_TERMS = [
+    'gas', 'metano', 'gas naturale', 'distribuzione gas',
+    'smc', 'standard m³', 'metri cubi', 'metro cubo',
+    'consumo gas', 'lettura gas', 'fornitura gas',
+    'materia gas', 'importi gas', 'consumi gas',
+    'bolletta gas', 'riepilogo gas', 'spesa gas',
+    'pcs', 'potere calorifico', 'coefficiente c',
+    'punto di riconsegna', 'pdr', 'codice pdr',
+    'remi', 'classe del misuratore', 'gas metano',
+    'servizio gas', 'offerta gas', 'costo gas',
+    'mc', 'm³', 'consumo mc', 'volume gas',
+    'gas naturale', 'gas metano', 'fornitura gas'
+]
+
+ELECTRICITY_TERMS = [
+    'energia elettrica', 'luce', 'elettricità',
+    'kw', 'kwh', 'chilowattora', 'kilowattora',
+    'consumo energia', 'potenza', 'energia attiva',
+    'f1', 'f2', 'f3', 'fascia oraria', 'fasce',
+    'lettura energia', 'potenza impegnata',
+    'dispacciamento', 'consumo elettrico',
+    'tariffa energia', 'spesa energia',
+    'quota energia', 'energia reattiva',
+    'servizio elettrico', 'contatore elettrico',
+    'pod', 'codice pod', 'punto di prelievo',
+    'potenza disponibile', 'tensione di alimentazione',
+    'offerta luce', 'costo energia', 'consumo kwh',
+    'energia', 'corrente elettrica', 'fornitura energia'
+]
+
 class OCRTimeoutError(Exception):
     pass
 
-def process_image_with_timeout(image, timeout_seconds=15):  # Ridotto da 30 a 15 secondi
+def process_image_with_timeout(image, timeout_seconds=15):
     """Process a single image with OCR and timeout"""
     with ThreadPoolExecutor(max_workers=1) as executor:
         future = executor.submit(pytesseract.image_to_string, 
-                               image, 
-                               config=r'--oem 3 --psm 6 -l ita+eng')
+                             image, 
+                             config=r'--oem 3 --psm 6 -l ita+eng')
         try:
             return future.result(timeout=timeout_seconds)
         except TimeoutError:
@@ -106,155 +137,141 @@ def extract_cost_per_unit(text):
         return None
 
 def detect_bill_type(text):
-        """Detect bill type from OCR text with improved keyword matching"""
-        logging.debug("Starting bill type detection")
-        if not text:
-            logging.error("Empty text provided to detect_bill_type")
-            return 'UNKNOWN'
+    """Detect bill type from OCR text with improved keyword matching"""
+    logging.debug("Starting bill type detection")
+    if not text:
+        logging.error("Empty text provided to detect_bill_type")
+        return 'UNKNOWN'
 
-        text = text.lower()
-        logging.debug(f"Analyzing text (first 500 chars): {text[:500]}...")
+    text = text.lower()
+    logging.info("Full text content for analysis:")
+    logging.info(text)
 
-        # Terms that strongly indicate a mixed bill
-        mix_patterns = [
-            r'doppia\s+fornitura',
-            r'dual\s+fuel',
-            r'gas\s+[e&]\s+luce',
-            r'luce\s+[e&]\s+gas',
-            r'(?:bolletta|fattura)\s+(?:unica|combinata)',
-            r'(?:enel|eni|a2a|iren|sorgenia)\s+gas\s+e\s+luce'
-        ]
+    # Terms that strongly indicate a mixed bill
+    mix_patterns = [
+        r'doppia\s+fornitura',
+        r'dual\s+fuel',
+        r'gas\s+[e&]\s+luce',
+        r'luce\s+[e&]\s+gas',
+        r'(?:bolletta|fattura)\s+(?:unica|combinata)',
+        r'(?:enel|eni|a2a|iren|sorgenia)\s+gas\s+e\s+luce',
+        r'riepilogo\s+(?:importi)?\s*gas.*riepilogo\s+(?:importi)?\s*(?:energia|luce|elettrica)',
+        r'totale\s+gas.*totale\s+(?:energia|luce|elettrica)',
+        r'spesa\s+(?:per|della)?\s*materia\s+gas.*spesa\s+(?:per|della)?\s*materia\s+(?:energia|luce|elettrica)',
+        r'consumo\s+gas.*consumo\s+(?:energia|luce|elettrica)',
+        r'(?:importo|spesa)\s+gas.*(?:importo|spesa)\s+(?:energia|luce|elettrica)',
+        r'pdr.*pod',
+        r'pod.*pdr'
+    ]
 
-        # Check for SMC measurements and PDR (strong indicators of gas)
-        smc_patterns = [
-            r'\d+(?:[.,]\d+)?\s*(?:smc|Smc|SMC)',  # Standard SMC format
-            r'\d+(?:[.,]\d+)?\s*(?:m³|mc|metri cubi)',  # Cubic meters
-            r'consumo\s+(?:effettivo|reale|fatturato|stimato)?\s*(?:di)?\s*gas',  # Gas consumption
-            r'lettura\s+(?:attuale|precedente|gas)?\s*(?:mc|m³)',  # Gas meter reading
-            r'pdr\s*[:\s]\s*\d+',  # PDR number (gas meter ID)
-            r'punto\s+di\s+riconsegna\s*[:\s]\s*\d+',  # PDR full name
-            r'codice\s+(?:pdr|cliente\s+gas)\s*[:\s]\s*\d+',  # PDR variations
-            r'matricola\s+contatore\s+gas',  # Gas meter ID
-            r'remi\s*[:\s]',  # REMI code
-            r'(?:consumo|volume)\s+(?:annuo|mensile|effettivo)?\s*(?:gas|mc|m³)'  # Gas consumption variations
-        ]
+    # Check for SMC measurements and PDR (strong indicators of gas)
+    smc_patterns = [
+        r'\d+(?:[.,]\d+)?\s*(?:smc|Smc|SMC)',  # Standard SMC format
+        r'\d+(?:[.,]\d+)?\s*(?:m³|mc|metri cubi)',  # Cubic meters
+        r'consumo\s+(?:effettivo|reale|fatturato|stimato)?\s*(?:di)?\s*gas',  # Gas consumption
+        r'lettura\s+(?:attuale|precedente|gas)?\s*(?:mc|m³)',  # Gas meter reading
+        r'pdr\s*[:\s]\s*\d+',  # PDR number
+        r'punto\s+di\s+riconsegna\s*[:\s]\s*\d+',  # PDR full name
+        r'codice\s+(?:pdr|cliente\s+gas)\s*[:\s]\s*\d+',  # PDR variations
+        r'matricola\s+contatore\s+gas',  # Gas meter ID
+        r'remi\s*[:\s]',  # REMI code
+        r'(?:consumo|volume)\s+(?:annuo|mensile|effettivo)?\s*(?:gas|mc|m³)',  # Gas consumption variations
+        r'spesa\s+(?:per|della)?\s*materia\s+gas'  # Gas cost section
+    ]
 
-        # Check for KWH measurements and POD (strong indicators of electricity)
-        kwh_patterns = [
-            r'\d+(?:[.,]\d+)?\s*(?:kwh|kw/h|chilowattora|kw)',  # Standard KWH format
-            r'consumo\s+(?:effettivo|reale|fatturato|stimato)?\s*(?:di)?\s*energia',  # Energy consumption
-            r'(?:f1|f2|f3|fascia)\s*[:\s]\s*\d+',  # Time-based consumption
-            r'pod\s*[:\s]\s*[a-z0-9]+',  # POD number
-            r'punto\s+di\s+prelievo\s*[:\s]\s*[a-z0-9]+',  # POD full name
-            r'codice\s+(?:pod|cliente\s+energia)\s*[:\s]\s*[a-z0-9]+',  # POD variations
-            r'potenza\s+(?:impegnata|disponibile|contrattuale)',  # Power terms
-            r'(?:consumo|lettura)\s+(?:energia|elettrica|attiva)',  # Electricity consumption
-            r'tensione\s+di\s+alimentazione',  # Voltage
-            r'(?:contatore|matricola)\s+(?:elettrico|elettricità|energia)'  # Electricity meter
-        ]
+    # Check for KWH measurements and POD (strong indicators of electricity)
+    kwh_patterns = [
+        r'\d+(?:[.,]\d+)?\s*(?:kwh|kw/h|chilowattora|kw)',  # Standard KWH format
+        r'consumo\s+(?:effettivo|reale|fatturato|stimato)?\s*(?:di)?\s*energia',  # Energy consumption
+        r'(?:f1|f2|f3|fascia)\s*[:\s]\s*\d+',  # Time-based consumption
+        r'pod\s*[:\s]\s*[a-z0-9]+',  # POD number
+        r'punto\s+di\s+prelievo\s*[:\s]\s*[a-z0-9]+',  # POD full name
+        r'codice\s+(?:pod|cliente\s+energia)\s*[:\s]\s*[a-z0-9]+',  # POD variations
+        r'potenza\s+(?:impegnata|disponibile|contrattuale)',  # Power terms
+        r'(?:consumo|lettura)\s+(?:energia|elettrica|attiva)',  # Electricity consumption
+        r'tensione\s+di\s+alimentazione',  # Voltage
+        r'(?:contatore|matricola)\s+(?:elettrico|elettricità|energia)',  # Electricity meter
+        r'spesa\s+(?:per|della)?\s*materia\s+(?:energia|elettrica)'  # Electricity cost section
+    ]
 
-        # Enhanced list of Italian terms for gas bills
-        gas_terms = [
-            'gas', 'metano', 'gas naturale', 'distribuzione gas',
-            'smc', 'standard m³', 'metri cubi', 'metro cubo',
-            'consumo gas', 'lettura gas', 'fornitura gas',
-            'materia gas', 'importi gas', 'consumi gas',
-            'bolletta gas', 'riepilogo gas', 'spesa gas',
-            'pcs', 'potere calorifico', 'coefficiente c',
-            'punto di riconsegna', 'pdr', 'codice pdr',
-            'remi', 'classe del misuratore', 'gas metano',
-            'servizio gas', 'offerta gas', 'costo gas',
-            'mc', 'm³', 'consumo mc', 'volume gas',
-            'gas naturale', 'gas metano', 'fornitura gas'
-        ]
+    try:
+        # Initialize pattern matches and term counts
+        mix_matches = []
+        gas_pattern_matches = []
+        electricity_pattern_matches = []
+        gas_terms_found = []
+        electricity_terms_found = []
 
-        # Enhanced list of Italian terms for electricity bills
-        electricity_terms = [
-            'energia elettrica', 'luce', 'elettricità',
-            'kw', 'kwh', 'chilowattora', 'kilowattora',
-            'consumo energia', 'potenza', 'energia attiva',
-            'f1', 'f2', 'f3', 'fascia oraria', 'fasce',
-            'lettura energia', 'potenza impegnata',
-            'dispacciamento', 'consumo elettrico',
-            'tariffa energia', 'spesa energia',
-            'quota energia', 'energia reattiva',
-            'servizio elettrico', 'contatore elettrico',
-            'pod', 'codice pod', 'punto di prelievo',
-            'potenza disponibile', 'tensione di alimentazione',
-            'offerta luce', 'costo energia', 'consumo kwh',
-            'energia', 'corrente elettrica', 'fornitura energia'
-        ]
+        # Check for mixed bill patterns first
+        for pattern in mix_patterns:
+            matches = re.finditer(pattern, text)
+            for match in matches:
+                mix_matches.append(match.group(0))
+                logging.info(f"Found mix pattern match: {match.group(0)}")
 
-        try:
-            # Initialize pattern matches and term counts
-            mix_matches = []
-            gas_pattern_matches = []
-            electricity_pattern_matches = []
-            gas_terms_found = []
-            electricity_terms_found = []
+        # Check for SMC and gas-related patterns
+        for pattern in smc_patterns:
+            matches = re.finditer(pattern, text)
+            for match in matches:
+                gas_pattern_matches.append(match.group(0))
+                logging.info(f"Found gas pattern match: {match.group(0)}")
 
-            # Check for mixed bill patterns first
-            for pattern in mix_patterns:
-                matches = re.finditer(pattern, text)
-                for match in matches:
-                    mix_matches.append(match.group(0))
-                    logging.info(f"Found mix pattern match: {match.group(0)}")
+        # Check for KWH and electricity-related patterns
+        for pattern in kwh_patterns:
+            matches = re.finditer(pattern, text)
+            for match in matches:
+                electricity_pattern_matches.append(match.group(0))
+                logging.info(f"Found electricity pattern match: {match.group(0)}")
 
-            # Check for SMC and gas-related patterns
-            for pattern in smc_patterns:
-                matches = re.finditer(pattern, text)
-                for match in matches:
-                    gas_pattern_matches.append(match.group(0))
-                    logging.info(f"Found gas pattern match: {match.group(0)}")
+        # Count gas and electricity terms
+        for term in GAS_TERMS:
+            if term in text:
+                gas_terms_found.append(term)
 
-            # Check for KWH and electricity-related patterns
-            for pattern in kwh_patterns:
-                matches = re.finditer(pattern, text)
-                for match in matches:
-                    electricity_pattern_matches.append(match.group(0))
-                    logging.info(f"Found electricity pattern match: {match.group(0)}")
+        for term in ELECTRICITY_TERMS:
+            if term in text:
+                electricity_terms_found.append(term)
 
-            # Count gas and electricity terms
-            for term in gas_terms:
-                if term in text:
-                    gas_terms_found.append(term)
+        # Log all findings
+        logging.info(f"Mix matches found: {mix_matches}")
+        logging.info(f"Gas pattern matches: {gas_pattern_matches}")
+        logging.info(f"Electricity pattern matches: {electricity_pattern_matches}")
+        logging.info(f"Gas terms found: {gas_terms_found}")
+        logging.info(f"Electricity terms found: {electricity_terms_found}")
 
-            for term in electricity_terms:
-                if term in text:
-                    electricity_terms_found.append(term)
+        # Very relaxed decision logic with priority to mixed bills and sections
+        # Check for explicit mix patterns first
+        if mix_matches:
+            logging.info("Detected type: MIX (explicit mix patterns found)")
+            return 'MIX'
+        # Check for sections mentioning both gas and electricity
+        elif (len(gas_pattern_matches) > 0 and len(electricity_pattern_matches) > 0):
+            logging.info("Detected type: MIX (found both gas and electricity patterns)")
+            return 'MIX'
+        # Check for terms from both categories
+        elif (len(gas_terms_found) > 0 and len(electricity_terms_found) > 0):
+            logging.info("Detected type: MIX (found both gas and electricity terms)")
+            return 'MIX'
+        # Check for the presence of both PDR and POD
+        elif ('pdr' in text and 'pod' in text):
+            logging.info("Detected type: MIX (found both PDR and POD)")
+            return 'MIX'
+        # If we have any gas patterns/terms but no electricity, it's GAS
+        elif gas_pattern_matches or gas_terms_found:
+            logging.info("Detected type: GAS (gas patterns or terms found)")
+            return 'GAS'
+        # If we have any electricity patterns/terms but no gas, it's LUCE
+        elif electricity_pattern_matches or electricity_terms_found:
+            logging.info("Detected type: LUCE (electricity patterns or terms found)")
+            return 'LUCE'
 
-            # Log all findings
-            logging.info(f"Mix matches found: {mix_matches}")
-            logging.info(f"Gas pattern matches: {gas_pattern_matches}")
-            logging.info(f"Electricity pattern matches: {electricity_pattern_matches}")
-            logging.info(f"Gas terms found: {gas_terms_found}")
-            logging.info(f"Electricity terms found: {electricity_terms_found}")
+        logging.warning("Could not determine bill type with confidence")
+        return 'UNKNOWN'
 
-            # Very relaxed decision logic with priority to mixed bills
-            # If we find explicit mix patterns or both types of terms, it's a MIX
-            if mix_matches or (len(gas_terms_found) > 0 and len(electricity_terms_found) > 0):
-                logging.info("Detected type: MIX (explicit mix patterns or both types of terms)")
-                return 'MIX'
-            # If we have any gas pattern matches or terms, it's GAS
-            elif gas_pattern_matches or gas_terms_found:
-                logging.info("Detected type: GAS (gas patterns or terms found)")
-                return 'GAS'
-            # If we have any electricity pattern matches or terms, it's LUCE
-            elif electricity_pattern_matches or electricity_terms_found:
-                logging.info("Detected type: LUCE (electricity patterns or terms found)")
-                return 'LUCE'
-            # If we find nothing conclusive, return MIX if we find both "gas" and generic energy terms
-            elif 'gas' in text and any(term in text for term in ['energia', 'consumo', 'bolletta', 'fattura']):
-                logging.info("Detected type: MIX (found 'gas' and generic energy terms)")
-                return 'MIX'
-
-            logging.warning("Could not determine bill type with confidence")
-            return 'UNKNOWN'
-
-        except Exception as e:
-            logging.exception(f"Error in detect_bill_type: {str(e)}")
-            # Instead of raising an error, return UNKNOWN to allow processing to continue
-            return 'UNKNOWN'
+    except Exception as e:
+        logging.exception(f"Error in detect_bill_type: {str(e)}")
+        # Instead of raising an error, return UNKNOWN to allow processing to continue
+        return 'UNKNOWN'
 
 def process_bill_ocr(file_path):
     """Process bill file with OCR using improved image processing and timeout handling"""
@@ -328,6 +345,9 @@ def process_bill_ocr(file_path):
         if not text.strip():
             logging.error("No text extracted from file")
             raise ValueError("No text could be extracted from the file")
+
+        logging.info("Extracted text content:")
+        logging.info(text)
 
         # Extract bill type and cost per unit
         logging.info("Starting bill type detection")
