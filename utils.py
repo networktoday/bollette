@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError
 class OCRTimeoutError(Exception):
     pass
 
-def process_image_with_timeout(image, timeout_seconds=30):
+def process_image_with_timeout(image, timeout_seconds=15):  # Ridotto da 30 a 15 secondi
     """Process a single image with OCR and timeout"""
     with ThreadPoolExecutor(max_workers=1) as executor:
         future = executor.submit(pytesseract.image_to_string, 
@@ -21,7 +21,8 @@ def process_image_with_timeout(image, timeout_seconds=30):
         try:
             return future.result(timeout=timeout_seconds)
         except TimeoutError:
-            raise OCRTimeoutError("OCR processing timed out")
+            logging.error(f"OCR timeout after {timeout_seconds} seconds")
+            raise OCRTimeoutError(f"OCR processing timed out after {timeout_seconds} seconds")
 
 def preprocess_image(image):
     """Pre-process the image to improve OCR accuracy"""
@@ -113,9 +114,24 @@ def detect_bill_type(text):
 
     text = text.lower()
 
+    # Check for SMC measurements (strong indicator of gas)
+    smc_patterns = [
+        r'\d+(?:[.,]\d+)?\s*(?:smc|Smc|SMC)',  # Standard SMC format
+        r'\d+(?:[.,]\d+)?\s*(?:m³|mc|metri cubi)',  # Cubic meters
+        r'consumo\s+(?:effettivo|reale|fatturato)?\s*(?:di)?\s*gas\s*:\s*\d+(?:[.,]\d+)?',  # Gas consumption
+        r'lettura\s+(?:attuale|precedente)?\s*(?:mc|m³)\s*:\s*\d+(?:[.,]\d+)?'  # Gas meter reading
+    ]
+
+    # Check for KWH measurements (strong indicator of electricity)
+    kwh_patterns = [
+        r'\d+(?:[.,]\d+)?\s*(?:kwh|kw/h|chilowattora)',  # Standard KWH format
+        r'consumo\s+(?:effettivo|reale|fatturato)?\s*(?:di)?\s*energia\s*:\s*\d+(?:[.,]\d+)?',  # Energy consumption
+        r'(?:f1|f2|f3)\s*:\s*\d+(?:[.,]\d+)?\s*kwh'  # Time-based consumption
+    ]
+
     # Enhanced list of Italian terms for gas bills
     gas_terms = [
-        'gas', 'metano', 'gas naturale',
+        'gas', 'metano', 'gas naturale', 'distribuzione gas',
         'smc', 'standard m³', 'metri cubi', 'metro cubo',
         'consumo gas', 'lettura gas', 'fornitura gas',
         'materia gas', 'importi gas', 'consumi gas',
@@ -125,7 +141,9 @@ def detect_bill_type(text):
         'm³', 'mc', 'standard metro cubo',
         'consumo metri cubi', 'lettura precedente mc',
         'lettura attuale mc', 'consumo mc', 'consumo smc',
-        'letture gas', 'importo gas', 'quota gas'
+        'letture gas', 'importo gas', 'quota gas',
+        'gas naturale', 'punto di riconsegna', 'pdr',
+        'codice pdr', 'remi', 'classe del misuratore'
     ]
 
     # Enhanced list of Italian terms for electricity bills
@@ -138,97 +156,66 @@ def detect_bill_type(text):
         'dispacciamento', 'consumo elettrico',
         'tariffa energia', 'spesa energia',
         'quota energia', 'energia reattiva',
-        'servizio elettrico', 'contatore elettrico'
-    ]
-
-    # Terms that might indicate a mixed bill
-    mix_terms = [
-        'offerta dual', 'dual fuel', 'doppia fornitura',
-        'gas e luce', 'luce e gas', 'energia e gas',
-        'gas ed energia', 'bolletta unica',
-        'fattura combinata', 'servizi congiunti',
-        'eni gas e luce', 'enel gas e luce',
-        'a2a gas e luce', 'edison gas e luce',
-        'iren gas e luce', 'sorgenia gas e luce'
+        'servizio elettrico', 'contatore elettrico',
+        'pod', 'codice pod', 'punto di prelievo',
+        'potenza disponibile', 'tensione di alimentazione'
     ]
 
     try:
-        # Initialize counters for found terms
+        # Initialize counters and found terms
         gas_terms_found = []
         electricity_terms_found = []
-        mix_terms_found = []
 
-        # Check for SMC measurements (strong indicator of gas)
-        smc_pattern = r'\d+(?:[.,]\d+)?\s*(?:smc|Smc|SMC|m³|mc)'
-        if re.search(smc_pattern, text):
-            logging.info("Found SMC/cubic meter measurement - strong indicator of gas presence")
-            gas_terms_found.append('smc_measurement')
+        # Check for SMC measurements
+        has_smc = False
+        for pattern in smc_patterns:
+            if re.search(pattern, text):
+                has_smc = True
+                logging.info(f"Found gas measurement pattern: {pattern}")
+                break
 
-        # Check for KWH measurements (strong indicator of electricity)
-        kwh_pattern = r'\d+(?:[.,]\d+)?\s*(?:kwh|kw/h|kw)'
-        if re.search(kwh_pattern, text):
-            logging.info("Found KWH measurement - strong indicator of electricity presence")
-            electricity_terms_found.append('kwh_measurement')
+        # Check for KWH measurements
+        has_kwh = False
+        for pattern in kwh_patterns:
+            if re.search(pattern, text):
+                has_kwh = True
+                logging.info(f"Found electricity measurement pattern: {pattern}")
+                break
 
-        # Split text into sections and search for terms
-        sections = text.split('\n\n')
-        for section in sections:
-            # Search for gas terms
-            found_gas_terms = [term for term in gas_terms if term in section]
-            if found_gas_terms:
-                gas_terms_found.extend(found_gas_terms)
-                logging.info(f"Found gas terms in section: {found_gas_terms}")
+        # Count gas and electricity terms
+        for term in gas_terms:
+            if term in text:
+                gas_terms_found.append(term)
 
-            # Search for electricity terms
-            found_electricity_terms = [term for term in electricity_terms if term in section]
-            if found_electricity_terms:
-                electricity_terms_found.extend(found_electricity_terms)
-                logging.info(f"Found electricity terms in section: {found_electricity_terms}")
-
-            # Search for mix terms
-            found_mix_terms = [term for term in mix_terms if term in section]
-            if found_mix_terms:
-                mix_terms_found.extend(found_mix_terms)
-                logging.info(f"Found mix terms in section: {found_mix_terms}")
-
-        # Count unique terms
-        unique_gas_terms = len(set(gas_terms_found))
-        unique_electricity_terms = len(set(electricity_terms_found))
-        unique_mix_terms = len(set(mix_terms_found))
+        for term in electricity_terms:
+            if term in text:
+                electricity_terms_found.append(term)
 
         # Log findings
-        logging.info(f"Gas terms found ({unique_gas_terms}): {set(gas_terms_found)}")
-        logging.info(f"Electricity terms found ({unique_electricity_terms}): {set(electricity_terms_found)}")
-        logging.info(f"Mix terms found ({unique_mix_terms}): {set(mix_terms_found)}")
+        logging.info(f"Gas terms found: {gas_terms_found}")
+        logging.info(f"Electricity terms found: {electricity_terms_found}")
+        logging.info(f"Has SMC measurements: {has_smc}")
+        logging.info(f"Has KWH measurements: {has_kwh}")
 
-        # Decision logic
-        has_smc = 'smc_measurement' in gas_terms_found
-        has_kwh = 'kwh_measurement' in electricity_terms_found
-
-        # If we have explicit mix terms and both types of measurements
-        if unique_mix_terms > 0 and has_smc and has_kwh:
-            logging.info("Detected type: MIX (explicit mix terms and both measurements)")
-            return 'MIX'
-
-        # If we have both SMC and KWH measurements
+        # Decision logic prioritizing measurements
         if has_smc and has_kwh:
             logging.info("Detected type: MIX (both SMC and KWH measurements)")
             return 'MIX'
-
-        # If we have SMC measurement or multiple gas terms, it's GAS
-        if has_smc or unique_gas_terms >= 2:
-            logging.info("Detected type: GAS (SMC measurement or multiple gas terms)")
+        elif has_smc:
+            logging.info("Detected type: GAS (SMC measurement found)")
             return 'GAS'
-
-        # If we have KWH measurement or multiple electricity terms, it's LUCE
-        if has_kwh or unique_electricity_terms >= 2:
-            logging.info("Detected type: LUCE (KWH measurement or multiple electricity terms)")
+        elif has_kwh:
+            logging.info("Detected type: LUCE (KWH measurement found)")
             return 'LUCE'
-
-        # If we have both gas and electricity terms (but no measurements)
-        if unique_gas_terms > 0 and unique_electricity_terms > 0:
+        elif len(gas_terms_found) > 0 and len(electricity_terms_found) > 0:
             logging.info("Detected type: MIX (both gas and electricity terms)")
             return 'MIX'
+        elif len(gas_terms_found) > 2:  # Require multiple gas terms for confidence
+            logging.info("Detected type: GAS (multiple gas terms)")
+            return 'GAS'
+        elif len(electricity_terms_found) > 2:  # Require multiple electricity terms for confidence
+            logging.info("Detected type: LUCE (multiple electricity terms)")
+            return 'LUCE'
 
         logging.warning("Could not determine bill type with confidence")
         return 'UNKNOWN'
@@ -253,12 +240,12 @@ def process_bill_ocr(file_path):
 
         text = ""
 
-        # Process PDF or image
+        # Process PDF or image with reduced timeout
         if file_path.lower().endswith('.pdf'):
             try:
                 logging.info("Converting PDF to images")
-                # Process only the first page with optimized DPI
-                images = convert_from_path(file_path, dpi=200, first_page=1, last_page=1)
+                # Process only first page with optimized DPI and reduced quality
+                images = convert_from_path(file_path, dpi=150, first_page=1, last_page=1)
 
                 if not images:
                     logging.error("Failed to convert PDF to images")
@@ -267,20 +254,17 @@ def process_bill_ocr(file_path):
                 image = images[0]
                 # Resize image if too large
                 width, height = image.size
-                if width > 1500 or height > 1500:
-                    ratio = min(1500/width, 1500/height)
+                if width > 1200 or height > 1200:  # Ridotto da 1500 a 1200
+                    ratio = min(1200/width, 1200/height)
                     new_size = (int(width * ratio), int(height * ratio))
                     image = image.resize(new_size, Image.Resampling.LANCZOS)
 
                 processed_image = preprocess_image(image)
-                text = process_image_with_timeout(processed_image, timeout_seconds=30)
+                text = process_image_with_timeout(processed_image, timeout_seconds=15)  # Ridotto timeout
 
-                if not text.strip():
-                    raise ValueError("No text could be extracted from the PDF")
-
-                logging.info("Successfully processed PDF page")
-                logging.debug(f"Sample text extracted: {text[:200]}")
-
+            except TimeoutError:
+                logging.error("PDF processing timeout")
+                raise OCRTimeoutError("PDF processing timed out")
             except Exception as e:
                 logging.exception("Error processing PDF")
                 raise RuntimeError(f"PDF processing failed: {str(e)}")
@@ -294,20 +278,17 @@ def process_bill_ocr(file_path):
 
                 # Resize image if too large
                 width, height = image.size
-                if width > 1500 or height > 1500:
-                    ratio = min(1500/width, 1500/height)
+                if width > 1200 or height > 1200:  # Ridotto da 1500 a 1200
+                    ratio = min(1200/width, 1200/height)
                     new_size = (int(width * ratio), int(height * ratio))
                     image = image.resize(new_size, Image.Resampling.LANCZOS)
 
                 processed_image = preprocess_image(image)
-                text = process_image_with_timeout(processed_image, timeout_seconds=30)
+                text = process_image_with_timeout(processed_image, timeout_seconds=15)  # Ridotto timeout
 
-                if not text.strip():
-                    raise ValueError("No text could be extracted from the image")
-
-                logging.info("Successfully processed image file")
-                logging.debug(f"Sample text extracted: {text[:200]}")
-
+            except TimeoutError:
+                logging.error("Image processing timeout")
+                raise OCRTimeoutError("Image processing timed out")
             except Exception as e:
                 logging.exception("Error processing image")
                 raise RuntimeError(f"Image processing failed: {str(e)}")
@@ -331,6 +312,9 @@ def process_bill_ocr(file_path):
 
         return cost_per_unit, bill_type
 
+    except OCRTimeoutError as e:
+        logging.error(f"OCR timeout: {str(e)}")
+        raise OCRTimeoutError(f"L'elaborazione OCR è durata troppo tempo: {str(e)}")
     except Exception as e:
         logging.exception(f"Unexpected error during OCR processing: {str(e)}")
         raise

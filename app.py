@@ -41,7 +41,7 @@ if not os.path.exists(uploads_dir):
 
 db.init_app(app)
 
-def process_file_with_timeout(file_path, timeout_seconds=120):
+def process_file_with_timeout(file_path, timeout_seconds=30):
     """Process a file with a global timeout"""
     with ThreadPoolExecutor(max_workers=1) as executor:
         future = executor.submit(process_bill_ocr, file_path)

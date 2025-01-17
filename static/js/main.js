@@ -180,50 +180,75 @@ document.addEventListener('DOMContentLoaded', function() {
             const formData = new FormData();
             formData.append('phone', phoneInput.value);
 
-            // Add files to FormData
-            uploadedFiles.forEach((file, index) => {
-                console.log(`Adding file ${index + 1}/${uploadedFiles.length}:`, file.name);
+            // Add files to FormData with progress tracking
+            let processedFiles = 0;
+            const totalFiles = uploadedFiles.length;
+
+            for (const file of uploadedFiles) {
+                processedFiles++;
+                console.log(`Adding file ${processedFiles}/${totalFiles}:`, file.name);
                 formData.append('files[]', file);
-            });
+                showAlert('info', `Elaborazione file ${processedFiles}/${totalFiles}: ${file.name}`, false);
+            }
+
+            // Set timeout for the entire request
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 60000); // 60 second timeout
 
             console.log('Sending POST request to /upload');
-            const response = await fetch('/upload', {
-                method: 'POST',
-                body: formData
-            });
+            try {
+                const response = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData,
+                    signal: controller.signal
+                });
 
-            console.log('Received response:', response.status);
-            if (!response.ok) {
-                const errorData = await response.json().catch(() => ({ error: 'Errore di rete' }));
-                throw new Error(`HTTP error! status: ${response.status}, ${errorData.error || 'Errore sconosciuto'}`);
-            }
+                clearTimeout(timeout);
+                console.log('Received response:', response.status);
 
-            const result = await response.json();
-            console.log('Server response:', result);
-
-            if (result.success) {
-                console.log('Upload successful');
-                showAlert('success', result.message);
-
-                // Show warnings if any
-                if (result.warnings && result.warnings.length > 0) {
-                    result.warnings.forEach(warning => {
-                        showAlert('warning', warning);
-                    });
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({ error: 'Errore di rete' }));
+                    throw new Error(errorData.error || `Errore HTTP: ${response.status}`);
                 }
 
-                resetForm();
-            } else {
-                console.error('Upload failed:', result.error);
-                showAlert('danger', result.error || 'Caricamento fallito');
+                const result = await response.json();
+                console.log('Server response:', result);
+
+                if (result.success) {
+                    console.log('Upload successful');
+                    showAlert('success', result.message);
+
+                    // Show warnings if any
+                    if (result.warnings && result.warnings.length > 0) {
+                        result.warnings.forEach(warning => {
+                            showAlert('warning', warning);
+                        });
+                    }
+
+                    resetForm();
+                } else {
+                    console.error('Upload failed:', result.error);
+                    showAlert('danger', result.error || 'Caricamento fallito');
+                }
+            } catch (error) {
+                if (error.name === 'AbortError') {
+                    console.error('Request timed out');
+                    showAlert('danger', 'Timeout - L\'elaborazione sta richiedendo troppo tempo. Riprova con meno file o file più piccoli.');
+                } else {
+                    console.error('Upload error:', error);
+                    showAlert('danger', 'Errore durante il caricamento: ' + error.message);
+                }
             }
         } catch (error) {
-            console.error('Upload error:', error);
-            showAlert('danger', 'Si è verificato un errore durante il caricamento: ' + error.message);
+            console.error('Form submission error:', error);
+            showAlert('danger', 'Errore durante l\'invio del form: ' + error.message);
         } finally {
             // Re-enable submit button
             const submitButton = form.querySelector('button[type="submit"]');
             submitButton.disabled = false;
+            // Remove processing message
+            const processingAlerts = document.querySelectorAll('.alert-info');
+            processingAlerts.forEach(alert => alert.remove());
         }
     });
 
