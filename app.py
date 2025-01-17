@@ -49,28 +49,39 @@ def index():
 @app.route("/upload", methods=["POST"])
 def upload():
     try:
+        logging.info("Upload request received")
         phone = request.form.get("phone")
         bill_types = json.loads(request.form.get("billTypes", "[]"))
         files = request.files.getlist("files[]")
 
+        logging.info(f"Received phone: {phone}")
+        logging.info(f"Received bill types: {bill_types}")
+        logging.info(f"Received {len(files)} files")
+
         if not phone or not files:
+            logging.error("Missing required fields")
             return jsonify({"error": "Missing required fields"}), 400
 
         if len(files) != len(bill_types):
+            logging.error(f"Mismatch between files ({len(files)}) and bill types ({len(bill_types)})")
             return jsonify({"error": "Mismatch between files and bill types"}), 400
 
         # Process each file
         saved_bills = []
-        for file, bill_type in zip(files, bill_types):
+        for i, (file, bill_type) in enumerate(zip(files, bill_types)):
             if file:
+                logging.info(f"Processing file {i+1}/{len(files)}: {file.filename}")
                 # Save the file
                 file_path = save_file(file)
                 if file_path:
+                    logging.info(f"File saved at: {file_path}")
                     # Process with OCR
                     cost_per_unit, detected_type = process_bill_ocr(file_path)
+                    logging.info(f"OCR results - Cost per unit: {cost_per_unit}, Detected type: {detected_type}")
 
                     # Use detected type if available, otherwise use client-side type
                     final_type = detected_type if detected_type and detected_type != 'UNKNOWN' else bill_type
+                    logging.info(f"Using bill type: {final_type}")
 
                     # Create new bill record
                     bill = models.Bill(
@@ -83,17 +94,20 @@ def upload():
                     saved_bills.append(bill)
 
         # Commit all bills to database
+        logging.info("Committing bills to database")
         db.session.commit()
 
         # Return success response with bill IDs
-        return jsonify({
+        response_data = {
             "success": True,
             "message": "Bills uploaded successfully",
             "bills": [bill.to_dict() for bill in saved_bills]
-        })
+        }
+        logging.info("Upload completed successfully")
+        return jsonify(response_data)
     except Exception as e:
         logging.error(f"Upload error: {str(e)}")
-        return jsonify({"error": "Upload failed"}), 500
+        return jsonify({"error": "Upload failed", "details": str(e)}), 500
 
 with app.app_context():
     import models

@@ -270,10 +270,15 @@ document.addEventListener('DOMContentLoaded', function() {
 
     form.addEventListener('submit', async function(e) {
         e.preventDefault();
+        console.log('Form submit started');
 
-        if (!validateForm()) return;
+        if (!validateForm()) {
+            console.log('Form validation failed');
+            return;
+        }
 
         // Wait for all OCR processes to complete
+        console.log('Starting OCR processes');
         const ocrPromises = uploadedFiles.map((file, index) => {
             if (!billTypes[index]) {
                 return processBillOCR(file, index);
@@ -282,31 +287,44 @@ document.addEventListener('DOMContentLoaded', function() {
         });
 
         try {
+            console.log('Waiting for OCR completion');
             await Promise.all(ocrPromises);
 
             const billTypesArray = uploadedFiles.map((_, index) => billTypes[index] || 'UNKNOWN');
+            console.log('Bill types:', billTypesArray);
+
             if (billTypesArray.some(type => !type || type === 'UNKNOWN')) {
+                console.log('Unknown bill types detected');
                 showAlert('warning', 'Alcuni tipi di bollette non sono stati riconosciuti correttamente. Continuare comunque?');
                 return;
             }
 
+            console.log('Creating FormData');
             const formData = new FormData();
             formData.append('phone', phoneInput.value);
             formData.append('billTypes', JSON.stringify(billTypesArray));
+
+            console.log('Adding files to FormData');
             uploadedFiles.forEach((file, index) => {
+                console.log(`Adding file ${index + 1}/${uploadedFiles.length}:`, file.name);
                 formData.append('files[]', file);
             });
 
+            console.log('Sending POST request to /upload');
             const response = await fetch('/upload', {
                 method: 'POST',
                 body: formData
             });
 
+            console.log('Received response:', response.status);
             const result = await response.json();
+
             if (result.success) {
+                console.log('Upload successful');
                 showAlert('success', 'File caricati con successo!');
                 resetForm();
             } else {
+                console.error('Upload failed:', result.error);
                 showAlert('danger', result.error || 'Caricamento fallito');
             }
         } catch (error) {
