@@ -137,6 +137,16 @@ def detect_bill_type(text):
         'consumo fatturato', 'oneri di sistema', 'servizio elettrico'
     ]
 
+    # Aggiungi termini specifici per fornitori italiani e bollette miste
+    mix_terms = [
+        'offerta dual', 'dual fuel', 'doppia fornitura', 'gas e luce',
+        'luce e gas', 'energia e gas', 'gas ed energia', 'duplice',
+        'fornitura combinata', 'servizio combinato', 'bolletta unica',
+        'fattura combinata', 'servizi congiunti', 'eni gas e luce',
+        'enel gas e luce', 'a2a gas e luce', 'edison gas e luce',
+        'iren gas e luce', 'sorgenia gas e luce'
+    ]
+
     try:
         # Split text into sections for better context
         sections = text.split('\n\n')  # Split by double newline to get logical sections
@@ -144,8 +154,19 @@ def detect_bill_type(text):
         # Initialize counters and found terms
         gas_found = []
         electricity_found = []
+        mix_found = []
 
         for section in sections:
+            # Check for mix terms first
+            section_mix_terms = [term for term in mix_terms if term in section]
+            if section_mix_terms:
+                mix_found.extend(section_mix_terms)
+                logging.info(f"Found mix terms in section: {section_mix_terms}")
+                # If we find explicit mix terms, we can return immediately
+                if mix_found:
+                    logging.info("Detected bill type: MIX (explicit mix terms found)")
+                    return 'MIX'
+
             # Check for gas terms
             section_gas_terms = [term for term in gas_terms if term in section]
             gas_found.extend(section_gas_terms)
@@ -165,14 +186,15 @@ def detect_bill_type(text):
         logging.info(f"Electricity terms: {set(electricity_found)}")
 
         # Enhanced decision logic with weighted scoring
+        # If we find both gas and electricity terms, it's likely a MIX bill
         if unique_gas_terms > 0 and unique_electricity_terms > 0:
-            logging.info("Detected bill type: MIX (contains both gas and electricity terms)")
+            logging.info(f"Detected bill type: MIX (gas terms: {unique_gas_terms}, electricity terms: {unique_electricity_terms})")
             return 'MIX'
         elif unique_gas_terms > 0:
-            logging.info("Detected bill type: GAS")
+            logging.info(f"Detected bill type: GAS (found {unique_gas_terms} unique terms)")
             return 'GAS'
         elif unique_electricity_terms > 0:
-            logging.info("Detected bill type: LUCE")
+            logging.info(f"Detected bill type: LUCE (found {unique_electricity_terms} unique terms)")
             return 'LUCE'
 
         logging.warning("No relevant terms found in the text")
