@@ -34,21 +34,23 @@ def preprocess_image(image):
         # Convert to grayscale
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-        # Apply advanced preprocessing techniques
-        # 1. Noise reduction with bilateral filter for better edge preservation
-        denoised = cv2.bilateralFilter(gray, 9, 75, 75)
+        # Apply multiple preprocessing techniques
+        # 1. Noise reduction
+        denoised = cv2.fastNlMeansDenoising(gray)
 
-        # 2. Adaptive thresholding with optimized parameters
-        binary = cv2.adaptiveThreshold(
-            denoised, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 15, 8
-        )
-
-        # 3. Enhanced contrast with optimized parameters
+        # 2. Increase contrast
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-        enhanced = clahe.apply(binary)
+        contrasted = clahe.apply(denoised)
+
+        # 3. Thresholding
+        _, binary = cv2.threshold(contrasted, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+        # 4. Dilation to make text more prominent
+        kernel = np.ones((1,1), np.uint8)
+        dilated = cv2.dilate(binary, kernel, iterations=1)
 
         # Convert back to PIL Image
-        enhanced_pil = Image.fromarray(enhanced)
+        enhanced_pil = Image.fromarray(dilated)
 
         logging.info("Image pre-processing completed successfully")
         return enhanced_pil
@@ -111,112 +113,124 @@ def detect_bill_type(text):
 
     text = text.lower()
 
-    # Enhanced list of Italian and English terms for each type
+    # Enhanced list of Italian terms for gas bills
     gas_terms = [
-        'gas', 'cubic meter', 'm³', 'mc', 'metano', 'consumo gas',
-        'lettura gas', 'fornitura gas', 'gas naturale', 'smc', 'standard m³',
-        'metri cubi', 'metro cubo', 'materia gas', 'importi gas',
-        'consumi gas', 'bolletta gas', 'gas naturale', 'riepilogo gas',
-        'spesa materia gas', 'consumo metri cubi', 'prelievo gas',
-        'costo gas', 'tariffa gas', 'spesa gas', 'quota gas',
-        'valore gas', 'volume gas', 'gas consumato', 'componente gas',
-        'fornitura di gas', 'servizio gas', 'importo gas', 'letture gas',
-        'Smc', 'SMC', 'smc', 'Standard metro cubo',  # Aggiunti termini tecnici per il gas
-        'PCS', 'potere calorifico superiore',        # Termini tecnici aggiuntivi
-        'coefficiente C', 'coefficiente M',          # Coefficienti di conversione gas
-        'lettura precedente mc', 'lettura attuale mc',
-        'consumo mc', 'consumo smc'
+        'gas', 'metano', 'gas naturale',
+        'smc', 'standard m³', 'metri cubi', 'metro cubo',
+        'consumo gas', 'lettura gas', 'fornitura gas',
+        'materia gas', 'importi gas', 'consumi gas',
+        'bolletta gas', 'riepilogo gas', 'spesa gas',
+        'costo gas', 'tariffa gas', 'volume gas',
+        'pcs', 'potere calorifico', 'coefficiente c',
+        'm³', 'mc', 'standard metro cubo',
+        'consumo metri cubi', 'lettura precedente mc',
+        'lettura attuale mc', 'consumo mc', 'consumo smc',
+        'letture gas', 'importo gas', 'quota gas'
     ]
 
+    # Enhanced list of Italian terms for electricity bills
     electricity_terms = [
-        'electricity', 'electric', 'kw', 'kwh', 'kilowatt',
-        'energia elettrica', 'consumo energia', 'luce', 'elettricità',
-        'potenza', 'lettura energia', 'energia', 'corrente elettrica',
-        'materia energia', 'importi energia', 'riepilogo energia',
-        'spesa energia', 'f1', 'f2', 'f3', 'fascia oraria',
-        'consumo elettrico', 'costo energia', 'tariffa energia',
-        'spesa energia', 'quota energia', 'potenza impegnata',
-        'energia attiva', 'energia reattiva', 'lettura elettrica',
-        'servizi di rete', 'dispacciamento', 'fornitura elettrica',
-        'potenza disponibile', 'potenza contrattualmente impegnata',
-        'consumo fatturato', 'oneri di sistema', 'servizio elettrico'
+        'energia elettrica', 'luce', 'elettricità',
+        'kw', 'kwh', 'chilowattora', 'kilowattora',
+        'consumo energia', 'potenza', 'energia attiva',
+        'f1', 'f2', 'f3', 'fascia oraria', 'fasce',
+        'lettura energia', 'potenza impegnata',
+        'dispacciamento', 'consumo elettrico',
+        'tariffa energia', 'spesa energia',
+        'quota energia', 'energia reattiva',
+        'servizio elettrico', 'contatore elettrico'
     ]
 
-    # Aggiungi termini specifici per fornitori italiani e bollette miste
+    # Terms that might indicate a mixed bill
     mix_terms = [
-        'offerta dual', 'dual fuel', 'doppia fornitura', 'gas e luce',
-        'luce e gas', 'energia e gas', 'gas ed energia', 'duplice',
-        'fornitura combinata', 'servizio combinato', 'bolletta unica',
-        'fattura combinata', 'servizi congiunti', 'eni gas e luce',
-        'enel gas e luce', 'a2a gas e luce', 'edison gas e luce',
+        'offerta dual', 'dual fuel', 'doppia fornitura',
+        'gas e luce', 'luce e gas', 'energia e gas',
+        'gas ed energia', 'bolletta unica',
+        'fattura combinata', 'servizi congiunti',
+        'eni gas e luce', 'enel gas e luce',
+        'a2a gas e luce', 'edison gas e luce',
         'iren gas e luce', 'sorgenia gas e luce'
     ]
 
     try:
-        # Split text into sections for better context
-        sections = text.split('\n\n')  # Split by double newline to get logical sections
+        # Initialize counters for found terms
+        gas_terms_found = []
+        electricity_terms_found = []
+        mix_terms_found = []
 
-        # Initialize counters and found terms
-        gas_found = []
-        electricity_found = []
-        mix_found = []
-
-        # First check for explicit SMC values which strongly indicate gas presence
-        smc_pattern = r'\d+(?:[.,]\d+)?\s*(?:smc|Smc|SMC)'
+        # Check for SMC measurements (strong indicator of gas)
+        smc_pattern = r'\d+(?:[.,]\d+)?\s*(?:smc|Smc|SMC|m³|mc)'
         if re.search(smc_pattern, text):
-            logging.info("Found SMC measurement in text - strong indicator of gas presence")
-            gas_found.append('smc_measurement')
+            logging.info("Found SMC/cubic meter measurement - strong indicator of gas presence")
+            gas_terms_found.append('smc_measurement')
 
+        # Check for KWH measurements (strong indicator of electricity)
+        kwh_pattern = r'\d+(?:[.,]\d+)?\s*(?:kwh|kw/h|kw)'
+        if re.search(kwh_pattern, text):
+            logging.info("Found KWH measurement - strong indicator of electricity presence")
+            electricity_terms_found.append('kwh_measurement')
+
+        # Split text into sections and search for terms
+        sections = text.split('\n\n')
         for section in sections:
-            # Check for mix terms first
-            section_mix_terms = [term for term in mix_terms if term in section]
-            if section_mix_terms:
-                mix_found.extend(section_mix_terms)
-                logging.info(f"Found mix terms in section: {section_mix_terms}")
+            # Search for gas terms
+            found_gas_terms = [term for term in gas_terms if term in section]
+            if found_gas_terms:
+                gas_terms_found.extend(found_gas_terms)
+                logging.info(f"Found gas terms in section: {found_gas_terms}")
 
-            # Check for gas terms
-            section_gas_terms = [term for term in gas_terms if term in section]
-            if section_gas_terms:
-                gas_found.extend(section_gas_terms)
-                logging.info(f"Found gas terms in section: {section_gas_terms}")
+            # Search for electricity terms
+            found_electricity_terms = [term for term in electricity_terms if term in section]
+            if found_electricity_terms:
+                electricity_terms_found.extend(found_electricity_terms)
+                logging.info(f"Found electricity terms in section: {found_electricity_terms}")
 
-            # Check for electricity terms
-            section_electricity_terms = [term for term in electricity_terms if term in section]
-            if section_electricity_terms:
-                electricity_found.extend(section_electricity_terms)
-                logging.info(f"Found electricity terms in section: {section_electricity_terms}")
+            # Search for mix terms
+            found_mix_terms = [term for term in mix_terms if term in section]
+            if found_mix_terms:
+                mix_terms_found.extend(found_mix_terms)
+                logging.info(f"Found mix terms in section: {found_mix_terms}")
 
-        # Count unique terms found
-        unique_gas_terms = len(set(gas_found))
-        unique_electricity_terms = len(set(electricity_found))
-        unique_mix_terms = len(set(mix_found))
+        # Count unique terms
+        unique_gas_terms = len(set(gas_terms_found))
+        unique_electricity_terms = len(set(electricity_terms_found))
+        unique_mix_terms = len(set(mix_terms_found))
 
-        # Log detailed findings
-        logging.info(f"Unique gas terms found: {unique_gas_terms}")
-        logging.info(f"Gas terms: {set(gas_found)}")
-        logging.info(f"Unique electricity terms found: {unique_electricity_terms}")
-        logging.info(f"Electricity terms: {set(electricity_found)}")
-        logging.info(f"Unique mix terms found: {unique_mix_terms}")
-        logging.info(f"Mix terms: {set(mix_found)}")
+        # Log findings
+        logging.info(f"Gas terms found ({unique_gas_terms}): {set(gas_terms_found)}")
+        logging.info(f"Electricity terms found ({unique_electricity_terms}): {set(electricity_terms_found)}")
+        logging.info(f"Mix terms found ({unique_mix_terms}): {set(mix_terms_found)}")
 
-        # Enhanced decision logic with weighted scoring
-        if unique_mix_terms > 0:
-            logging.info("Detected bill type: MIX (explicit mix terms found)")
+        # Decision logic
+        has_smc = 'smc_measurement' in gas_terms_found
+        has_kwh = 'kwh_measurement' in electricity_terms_found
+
+        # If we have explicit mix terms and both types of measurements
+        if unique_mix_terms > 0 and has_smc and has_kwh:
+            logging.info("Detected type: MIX (explicit mix terms and both measurements)")
             return 'MIX'
-        elif 'smc_measurement' in gas_found:
-            logging.info("Detected bill type: MIX (SMC measurement found with electricity terms)")
+
+        # If we have both SMC and KWH measurements
+        if has_smc and has_kwh:
+            logging.info("Detected type: MIX (both SMC and KWH measurements)")
             return 'MIX'
-        elif unique_gas_terms > 0 and unique_electricity_terms > 0:
-            logging.info(f"Detected bill type: MIX (gas terms: {unique_gas_terms}, electricity terms: {unique_electricity_terms})")
-            return 'MIX'
-        elif unique_gas_terms > 0:
-            logging.info(f"Detected bill type: GAS (found {unique_gas_terms} unique terms)")
+
+        # If we have SMC measurement or multiple gas terms, it's GAS
+        if has_smc or unique_gas_terms >= 2:
+            logging.info("Detected type: GAS (SMC measurement or multiple gas terms)")
             return 'GAS'
-        elif unique_electricity_terms > 0:
-            logging.info(f"Detected bill type: LUCE (found {unique_electricity_terms} unique terms)")
+
+        # If we have KWH measurement or multiple electricity terms, it's LUCE
+        if has_kwh or unique_electricity_terms >= 2:
+            logging.info("Detected type: LUCE (KWH measurement or multiple electricity terms)")
             return 'LUCE'
 
-        logging.warning("No relevant terms found in the text")
+        # If we have both gas and electricity terms (but no measurements)
+        if unique_gas_terms > 0 and unique_electricity_terms > 0:
+            logging.info("Detected type: MIX (both gas and electricity terms)")
+            return 'MIX'
+
+        logging.warning("Could not determine bill type with confidence")
         return 'UNKNOWN'
 
     except Exception as e:
