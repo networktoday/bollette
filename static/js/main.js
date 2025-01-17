@@ -284,49 +284,41 @@ document.addEventListener('DOMContentLoaded', function() {
 
             showAlert('info', 'Elaborazione in corso...');
 
-            console.log('Starting OCR processes');
-            const ocrPromises = uploadedFiles.map((file, index) => {
-                if (!billTypes[index]) {
-                    console.log(`Starting OCR for file ${index + 1}:`, file.name);
-                    return processBillOCR(file, index).catch(error => {
-                        console.error(`OCR failed for file ${file.name}:`, error);
-                        return false;
-                    });
-                }
-                return Promise.resolve(true);
-            });
-
-            console.log('Waiting for OCR completion');
-            const ocrResults = await Promise.all(ocrPromises);
-
-            if (ocrResults.some(result => !result)) {
-                console.error('Some OCR processes failed');
-                showAlert('danger', 'Errore durante l\'elaborazione di alcuni file');
+            // First validate files are still valid
+            if (!uploadedFiles.length) {
+                console.error('No files to upload');
+                showAlert('danger', 'Nessun file da caricare');
                 submitButton.disabled = false;
                 return;
-            }
-
-            const billTypesArray = uploadedFiles.map((_, index) => billTypes[index] || 'UNKNOWN');
-            console.log('Bill types:', billTypesArray);
-
-            if (billTypesArray.some(type => !type || type === 'UNKNOWN')) {
-                console.log('Unknown bill types detected');
-                if (!confirm('Alcuni tipi di bollette non sono stati riconosciuti correttamente. Vuoi continuare comunque?')) {
-                    submitButton.disabled = false;
-                    return;
-                }
             }
 
             console.log('Creating FormData');
             const formData = new FormData();
             formData.append('phone', phoneInput.value);
-            formData.append('billTypes', JSON.stringify(billTypesArray));
 
+            // Add files to FormData first
             console.log('Adding files to FormData');
+            let validFiles = true;
             uploadedFiles.forEach((file, index) => {
-                console.log(`Adding file ${index + 1}/${uploadedFiles.length}:`, file.name);
-                formData.append('files[]', file);
+                try {
+                    console.log(`Adding file ${index + 1}/${uploadedFiles.length}:`, file.name);
+                    formData.append('files[]', file);
+                } catch (error) {
+                    console.error(`Error adding file ${file.name}:`, error);
+                    validFiles = false;
+                }
             });
+
+            if (!validFiles) {
+                showAlert('danger', 'Errore durante la preparazione dei file');
+                submitButton.disabled = false;
+                return;
+            }
+
+            // Add bill types
+            const billTypesArray = uploadedFiles.map((_, index) => billTypes[index] || 'UNKNOWN');
+            console.log('Bill types:', billTypesArray);
+            formData.append('billTypes', JSON.stringify(billTypesArray));
 
             console.log('Sending POST request to /upload');
             const response = await fetch('/upload', {
@@ -335,7 +327,12 @@ document.addEventListener('DOMContentLoaded', function() {
             });
 
             console.log('Received response:', response.status);
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+
             const result = await response.json();
+            console.log('Server response:', result);
 
             if (result.success) {
                 console.log('Upload successful');
