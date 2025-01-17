@@ -6,6 +6,7 @@ from pdf2image import convert_from_path
 
 def extract_cost_per_unit(text):
     """Extract cost per unit from OCR text"""
+    logging.debug("Extracting cost per unit from text")
     # Regular expressions for cost extraction
     kw_pattern = r'(\$?\d+[.,]?\d*)\s*(?:\/|\s+per\s+)?\s*(?:kw|kwh)'
     cubic_meter_pattern = r'(\$?\d+[.,]?\d*)\s*(?:\/|\s+per\s+)?\s*(?:m³|mc)'
@@ -24,73 +25,59 @@ def extract_cost_per_unit(text):
 
 def detect_bill_type(text):
     """Detect bill type from OCR text"""
+    logging.debug("Detecting bill type from text")
     text = text.lower()
 
     # Define Italian and English terms for each type
-    gas_terms = [
-        'gas', 'cubic meter', 'm³', 'mc', 'metano', 'consumo gas',
-        'lettura gas', 'fornitura gas', 'gas naturale'
-    ]
-    electricity_terms = [
-        'electricity', 'electric', 'kw', 'kwh', 'kilowatt',
-        'energia elettrica', 'consumo energia', 'luce', 'elettricità',
-        'potenza', 'lettura energia', 'energia', 'corrente elettrica'
-    ]
+    gas_terms = ['gas', 'metano', 'consumo gas', 'lettura gas']
+    electricity_terms = ['energia elettrica', 'luce', 'elettricità', 'kw', 'kwh']
 
     # Count occurrences of terms
     gas_count = sum(1 for term in gas_terms if term in text)
     electricity_count = sum(1 for term in electricity_terms if term in text)
 
-    logging.debug(f"OCR Text content (first 500 chars): {text[:500]}")
-    logging.debug(f"Bill detection - Gas terms found: {gas_count}, Electricity terms found: {electricity_count}")
-    logging.debug("Found gas terms: " + ", ".join(term for term in gas_terms if term in text))
-    logging.debug("Found electricity terms: " + ", ".join(term for term in electricity_terms if term in text))
-
-    # Se troviamo una qualsiasi combinazione di termini gas ed elettricità, è una bolletta MIX
     if gas_count > 0 and electricity_count > 0:
-        logging.debug("Bill type detected: MIX (contains both gas and electricity terms)")
         return 'MIX'
     elif gas_count > 0:
-        logging.debug("Bill type detected: GAS")
         return 'GAS'
     elif electricity_count > 0:
-        logging.debug("Bill type detected: LUCE")
         return 'LUCE'
 
-    logging.debug("Bill type detected: UNKNOWN")
     return 'UNKNOWN'
 
 def process_bill_ocr(file_path):
     """Process bill file with OCR and extract information"""
     try:
+        logging.debug(f"Starting OCR processing for file: {file_path}")
+
         if file_path.lower().endswith('.pdf'):
-            # Convert all pages of PDF to images
-            images = convert_from_path(file_path)
+            # Convert first page of PDF to image
+            logging.debug("Converting PDF to image")
+            images = convert_from_path(file_path, first_page=1, last_page=1)
             if not images:
-                logging.error("Failed to convert PDF to images")
+                logging.error("Failed to convert PDF to image")
                 return None, None
 
-            # Process each page and combine the text
-            full_text = ""
-            for i, image in enumerate(images):
-                # Configure pytesseract for better accuracy
-                custom_config = r'--oem 3 --psm 6 -l ita+eng'
-                text = pytesseract.image_to_string(image, config=custom_config)
-                logging.debug(f"Page {i+1} OCR text: {text[:200]}...")
-                full_text += text + "\n"
+            image = images[0]
         else:
             # Open image file directly
+            logging.debug("Opening image file")
             image = Image.open(file_path)
-            custom_config = r'--oem 3 --psm 6 -l ita+eng'
-            full_text = pytesseract.image_to_string(image, config=custom_config)
 
-        logging.debug(f"Complete OCR Text extracted: {full_text}")
+        # Configure pytesseract for better accuracy with minimal settings
+        custom_config = r'--oem 3 --psm 6'
+        logging.debug("Performing OCR on image")
+        text = pytesseract.image_to_string(image, config=custom_config)
+
+        logging.debug(f"OCR text extracted (first 200 chars): {text[:200]}")
 
         # Extract information
-        cost_per_unit = extract_cost_per_unit(full_text)
-        bill_type = detect_bill_type(full_text)
+        cost_per_unit = extract_cost_per_unit(text)
+        bill_type = detect_bill_type(text)
 
+        logging.debug(f"Extracted cost per unit: {cost_per_unit}, bill type: {bill_type}")
         return cost_per_unit, bill_type
+
     except Exception as e:
         logging.error(f"OCR Processing error: {str(e)}")
         return None, None
