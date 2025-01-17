@@ -197,7 +197,7 @@ document.addEventListener('DOMContentLoaded', function() {
         text = text.toLowerCase();
         if (text.includes('gas') && text.includes('electricity')) return 'MIX';
         if (text.includes('gas')) return 'GAS';
-        if (text.includes('electricity') || text.includes('kw')) return 'LIGHT';
+        if (text.includes('electricity') || text.includes('kw')) return 'LUCE';
         return 'UNKNOWN';
     }
 
