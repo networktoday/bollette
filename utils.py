@@ -28,12 +28,19 @@ def detect_bill_type(text):
     gas_terms = len(re.findall(r'gas|cubic meter|m³', text))
     electricity_terms = len(re.findall(r'electricity|electric|kw|kilowatt', text))
 
+    logging.debug(f"Bill detection - Gas terms found: {gas_terms}, Electricity terms found: {electricity_terms}")
+
     if gas_terms > 0 and electricity_terms > 0:
+        logging.debug("Bill type detected: MIX (contains both gas and electricity terms)")
         return 'MIX'
     elif gas_terms > 0:
+        logging.debug("Bill type detected: GAS")
         return 'GAS'
     elif electricity_terms > 0:
-        return 'LUCE'  # Changed from 'LIGHT' to 'LUCE'
+        logging.debug("Bill type detected: LUCE")
+        return 'LUCE'
+
+    logging.debug("Bill type detected: UNKNOWN")
     return 'UNKNOWN'
 
 def process_bill_ocr(file_path):
