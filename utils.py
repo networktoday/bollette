@@ -41,9 +41,12 @@ def detect_bill_type(text):
     gas_count = sum(1 for term in gas_terms if term in text)
     electricity_count = sum(1 for term in electricity_terms if term in text)
 
+    logging.debug(f"OCR Text content (first 500 chars): {text[:500]}")
     logging.debug(f"Bill detection - Gas terms found: {gas_count}, Electricity terms found: {electricity_count}")
+    logging.debug("Found gas terms: " + ", ".join(term for term in gas_terms if term in text))
+    logging.debug("Found electricity terms: " + ", ".join(term for term in electricity_terms if term in text))
 
-    # If we find any combination of gas and electricity terms, it's a MIX bill
+    # Se troviamo una qualsiasi combinazione di termini gas ed elettricità, è una bolletta MIX
     if gas_count > 0 and electricity_count > 0:
         logging.debug("Bill type detected: MIX (contains both gas and electricity terms)")
         return 'MIX'
@@ -64,19 +67,24 @@ def process_bill_ocr(file_path):
             # Convert all pages of PDF to images
             images = convert_from_path(file_path)
             if not images:
+                logging.error("Failed to convert PDF to images")
                 return None, None
 
             # Process each page and combine the text
             full_text = ""
-            for image in images:
-                text = pytesseract.image_to_string(image, lang='ita+eng')
+            for i, image in enumerate(images):
+                # Configure pytesseract for better accuracy
+                custom_config = r'--oem 3 --psm 6 -l ita+eng'
+                text = pytesseract.image_to_string(image, config=custom_config)
+                logging.debug(f"Page {i+1} OCR text: {text[:200]}...")
                 full_text += text + "\n"
         else:
             # Open image file directly
             image = Image.open(file_path)
-            full_text = pytesseract.image_to_string(image, lang='ita+eng')
+            custom_config = r'--oem 3 --psm 6 -l ita+eng'
+            full_text = pytesseract.image_to_string(image, config=custom_config)
 
-        logging.debug(f"OCR Text extracted: {full_text[:200]}...")  # Log first 200 chars
+        logging.debug(f"Complete OCR Text extracted: {full_text}")
 
         # Extract information
         cost_per_unit = extract_cost_per_unit(full_text)
