@@ -202,49 +202,29 @@ def process_bill_ocr(file_path):
         if file_path.lower().endswith('.pdf'):
             try:
                 logging.info("Converting PDF to images")
-                # Increased DPI and process more pages for better accuracy
-                images = convert_from_path(file_path, dpi=400, first_page=1, last_page=3)
+                # Process only the first page with optimized DPI
+                images = convert_from_path(file_path, dpi=200, first_page=1, last_page=1)
 
                 if not images:
                     logging.error("Failed to convert PDF to images")
                     raise ValueError("Failed to convert PDF to images")
 
-                successful_pages = 0
-                for page_num, image in enumerate(images, 1):
-                    try:
-                        logging.info(f"Processing page {page_num}/{len(images)}")
+                image = images[0]
+                # Resize image if too large
+                width, height = image.size
+                if width > 1500 or height > 1500:
+                    ratio = min(1500/width, 1500/height)
+                    new_size = (int(width * ratio), int(height * ratio))
+                    image = image.resize(new_size, Image.Resampling.LANCZOS)
 
-                        # Resize image if too large
-                        width, height = image.size
-                        if width > 2000 or height > 2000:
-                            ratio = min(2000/width, 2000/height)
-                            new_size = (int(width * ratio), int(height * ratio))
-                            image = image.resize(new_size, Image.Resampling.LANCZOS)
+                processed_image = preprocess_image(image)
+                text = process_image_with_timeout(processed_image, timeout_seconds=30)
 
-                        processed_image = preprocess_image(image)
-                        page_text = process_image_with_timeout(processed_image, timeout_seconds=45)
+                if not text.strip():
+                    raise ValueError("No text could be extracted from the PDF")
 
-                        if page_text.strip():  # Only add non-empty text
-                            text += page_text + "\n"
-                            successful_pages += 1
-                            logging.info(f"Successfully processed page {page_num}")
-                            logging.debug(f"Sample text from page {page_num}: {page_text[:200]}")
-                        else:
-                            logging.warning(f"No text extracted from page {page_num}")
-
-                    except OCRTimeoutError:
-                        logging.warning(f"OCR timeout on page {page_num}, continuing with extracted text")
-                        if successful_pages > 0:
-                            break
-                        continue
-                    except Exception as e:
-                        logging.error(f"Error processing page {page_num}: {str(e)}")
-                        if successful_pages > 0:
-                            break
-                        continue
-
-                if successful_pages == 0:
-                    raise RuntimeError("Failed to process any pages successfully")
+                logging.info("Successfully processed PDF page")
+                logging.debug(f"Sample text extracted: {text[:200]}")
 
             except Exception as e:
                 logging.exception("Error processing PDF")
@@ -259,13 +239,13 @@ def process_bill_ocr(file_path):
 
                 # Resize image if too large
                 width, height = image.size
-                if width > 2000 or height > 2000:
-                    ratio = min(2000/width, 2000/height)
+                if width > 1500 or height > 1500:
+                    ratio = min(1500/width, 1500/height)
                     new_size = (int(width * ratio), int(height * ratio))
                     image = image.resize(new_size, Image.Resampling.LANCZOS)
 
                 processed_image = preprocess_image(image)
-                text = process_image_with_timeout(processed_image, timeout_seconds=45)
+                text = process_image_with_timeout(processed_image, timeout_seconds=30)
 
                 if not text.strip():
                     raise ValueError("No text could be extracted from the image")
@@ -273,9 +253,6 @@ def process_bill_ocr(file_path):
                 logging.info("Successfully processed image file")
                 logging.debug(f"Sample text extracted: {text[:200]}")
 
-            except OCRTimeoutError:
-                logging.error("OCR timeout processing image")
-                raise RuntimeError("OCR processing timed out")
             except Exception as e:
                 logging.exception("Error processing image")
                 raise RuntimeError(f"Image processing failed: {str(e)}")
@@ -284,7 +261,7 @@ def process_bill_ocr(file_path):
             logging.error("No text extracted from file")
             raise ValueError("No text could be extracted from the file")
 
-        # Extract bill type and cost per unit with more detailed logging
+        # Extract bill type and cost per unit
         logging.info("Starting bill type detection")
         bill_type = detect_bill_type(text)
         logging.info(f"Detected bill type: {bill_type}")
@@ -296,9 +273,6 @@ def process_bill_ocr(file_path):
         logging.info("Starting cost extraction")
         cost_per_unit = extract_cost_per_unit(text)
         logging.info(f"Extracted cost per unit: {cost_per_unit}")
-
-        if cost_per_unit is None:
-            logging.warning("Could not extract cost per unit")
 
         return cost_per_unit, bill_type
 

@@ -6,6 +6,8 @@ import logging
 import uuid
 from werkzeug.utils import secure_filename
 from utils import process_bill_ocr
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
+import threading
 
 # Configure logging with more details
 logging.basicConfig(
@@ -38,6 +40,16 @@ if not os.path.exists(uploads_dir):
         logging.error(f"Failed to create uploads directory: {str(e)}")
 
 db.init_app(app)
+
+def process_file_with_timeout(file_path, timeout_seconds=120):
+    """Process a file with a global timeout"""
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(process_bill_ocr, file_path)
+        try:
+            return future.result(timeout=timeout_seconds)
+        except TimeoutError:
+            logging.error(f"Global timeout ({timeout_seconds}s) reached for file: {file_path}")
+            raise RuntimeError(f"Processing timeout after {timeout_seconds} seconds")
 
 def save_file(file):
     """Save uploaded file and return the file path"""
@@ -130,10 +142,10 @@ def upload():
                     errors.append(msg)
                     continue
 
-                # Process with OCR
+                # Process with OCR using timeout
                 logging.info(f"Starting OCR processing for: {file_path}")
                 try:
-                    cost_per_unit, detected_type = process_bill_ocr(file_path)
+                    cost_per_unit, detected_type = process_file_with_timeout(file_path)
                     logging.info(f"OCR results - Cost per unit: {cost_per_unit}, Type: {detected_type}")
 
                     # Create new bill record
