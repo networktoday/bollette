@@ -9,7 +9,7 @@ from pdf2image import convert_from_path
 
 def preprocess_image(image):
     """
-    Pre-process the image to improve OCR accuracy
+    Pre-process the image to improve OCR accuracy with enhanced number detection
     """
     logging.info("Starting image pre-processing")
     try:
@@ -20,15 +20,21 @@ def preprocess_image(image):
         # Convert to grayscale
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-        # Apply thresholding to get black and white image
-        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        # Apply adaptive thresholding
+        binary = cv2.adaptiveThreshold(
+            gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2
+        )
 
-        # Noise removal
+        # Noise removal with different kernel sizes
         denoised = cv2.fastNlMeansDenoising(binary)
 
         # Increase contrast
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
         enhanced = clahe.apply(denoised)
+
+        # Morphological operations to improve text clarity
+        kernel = np.ones((1,1), np.uint8)
+        enhanced = cv2.morphologyEx(enhanced, cv2.MORPH_CLOSE, kernel)
 
         # Convert back to PIL Image
         enhanced_pil = Image.fromarray(enhanced)
@@ -46,7 +52,7 @@ def extract_cost_per_unit(text):
         logging.error("Empty text provided to extract_cost_per_unit")
         return None
 
-    # More comprehensive patterns for cost extraction
+    # Enhanced patterns for cost extraction
     patterns = [
         # Standard format with currency
         r'(?:€|EUR)?\s*(\d+[.,]\d*)\s*(?:\/|\s+per\s+)?\s*(?:kw|kwh|m³|mc)',
@@ -54,18 +60,36 @@ def extract_cost_per_unit(text):
         r'(\d+[.,]\d*)\s*(?:\/|\s+per\s+)?\s*(?:kw|kwh|m³|mc)',
         # Format with text description
         r'(?:costo|prezzo|tariffa)\s+(?:unitario|per)?\s+(?:€|EUR)?\s*(\d+[.,]\d*)',
+        # Enel specific formats
+        r'(?:prezzo energia|costo energia)\s*[F1-F3]?\s*(?:€|EUR)?\s*(\d+[.,]\d*)',
+        r'(?:componente energia|quota energia)\s*(?:€|EUR)?\s*(\d+[.,]\d*)',
+        # Additional number patterns near energy-related terms
+        r'(?:fascia|F[1-3]|monorario)\s*(?:€|EUR)?\s*(\d+[.,]\d*)',
+        r'energia\s+(?:attiva|reattiva)?\s*(?:€|EUR)?\s*(\d+[.,]\d*)'
     ]
 
     try:
+        # Log the text being analyzed for debugging
+        logging.debug("Text to analyze for cost:")
+        for line in text.split('\n'):
+            if any(term in line.lower() for term in ['€', 'eur', 'costo', 'prezzo', 'tariffa', 'energia']):
+                logging.debug(f"Potential cost line: {line}")
+
         for pattern in patterns:
-            match = re.search(pattern, text, re.IGNORECASE)
-            if match:
-                cost = float(match.group(1).replace(',', '.'))
-                logging.debug(f"Found cost: {cost} using pattern: {pattern}")
-                return cost
+            matches = re.finditer(pattern, text, re.IGNORECASE)
+            for match in matches:
+                try:
+                    cost = float(match.group(1).replace(',', '.').replace('€', ''))
+                    if 0 < cost < 1000:  # Sanity check for reasonable cost range
+                        logging.debug(f"Found valid cost: {cost} using pattern: {pattern}")
+                        return cost
+                    else:
+                        logging.debug(f"Found cost outside reasonable range: {cost}")
+                except ValueError:
+                    continue
 
         logging.warning("No cost per unit found in text")
-        logging.debug(f"Text analyzed: {text[:200]}...")
+        logging.debug(f"Full text analyzed: {text}")
         return None
     except Exception as e:
         logging.exception(f"Error extracting cost per unit from text: {str(e)}")
