@@ -8,7 +8,6 @@ from werkzeug.utils import secure_filename
 from utils import process_bill_ocr
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 import threading
-from sqlalchemy import func
 
 # Configure logging with more details
 logging.basicConfig(
@@ -204,36 +203,6 @@ def upload():
     except Exception as e:
         logging.exception("Unexpected error during upload")
         return jsonify({"error": f"Errore durante il caricamento: {str(e)}"}), 500
-
-@app.route("/analisi")
-def analysis():
-    try:
-        # Get bill type distribution
-        bill_types = db.session.query(
-            models.Bill.bill_type,
-            func.count(models.Bill.id).label('count')
-        ).group_by(models.Bill.bill_type).all()
-
-        # Get average costs per unit by bill type
-        avg_costs = db.session.query(
-            models.Bill.bill_type,
-            func.avg(models.Bill.cost_per_unit).label('avg_cost')
-        ).group_by(models.Bill.bill_type).all()
-
-        # Get recent bills (last 10)
-        recent_bills = db.session.query(models.Bill).order_by(
-            models.Bill.created_at.desc()
-        ).limit(10).all()
-
-        return render_template(
-            "analysis.html",
-            bill_types=bill_types,
-            avg_costs=avg_costs,
-            recent_bills=recent_bills
-        )
-    except Exception as e:
-        logging.exception("Error in analysis route")
-        return render_template("analysis.html", error=str(e))
 
 with app.app_context():
     import models
