@@ -47,8 +47,8 @@ def process_image_with_timeout(image, timeout_seconds=15):
     """Process a single image with OCR and timeout"""
     with ThreadPoolExecutor(max_workers=1) as executor:
         future = executor.submit(pytesseract.image_to_string, 
-                             image, 
-                             config=r'--oem 3 --psm 6 -l ita+eng')
+                                 image, 
+                                 config=r'--oem 3 --psm 6 -l ita+eng')
         try:
             return future.result(timeout=timeout_seconds)
         except TimeoutError:
@@ -293,23 +293,35 @@ def process_bill_ocr(file_path):
         if file_path.lower().endswith('.pdf'):
             try:
                 logging.info("Converting PDF to images")
-                # Process only first page with optimized DPI and reduced quality
-                images = convert_from_path(file_path, dpi=150, first_page=1, last_page=1)
+                # Process all pages of the PDF
+                images = convert_from_path(file_path, dpi=150)
 
                 if not images:
                     logging.error("Failed to convert PDF to images")
                     raise ValueError("Failed to convert PDF to images")
 
-                image = images[0]
-                # Resize image if too large
-                width, height = image.size
-                if width > 1200 or height > 1200:  # Ridotto da 1500 a 1200
-                    ratio = min(1200/width, 1200/height)
-                    new_size = (int(width * ratio), int(height * ratio))
-                    image = image.resize(new_size, Image.Resampling.LANCZOS)
+                logging.info(f"Processing {len(images)} pages from PDF")
+                all_text = []
 
-                processed_image = preprocess_image(image)
-                text = process_image_with_timeout(processed_image, timeout_seconds=15)  # Ridotto timeout
+                for i, image in enumerate(images, 1):
+                    logging.info(f"Processing page {i}/{len(images)}")
+                    # Resize image if too large
+                    width, height = image.size
+                    if width > 1200 or height > 1200:
+                        ratio = min(1200/width, 1200/height)
+                        new_size = (int(width * ratio), int(height * ratio))
+                        image = image.resize(new_size, Image.Resampling.LANCZOS)
+
+                    processed_image = preprocess_image(image)
+                    page_text = process_image_with_timeout(processed_image, timeout_seconds=15)
+                    if page_text.strip():
+                        all_text.append(page_text)
+                        logging.info(f"Successfully extracted text from page {i}")
+                    else:
+                        logging.warning(f"No text extracted from page {i}")
+
+                text = "\n".join(all_text)
+                logging.info(f"Combined text from all {len(images)} pages")
 
             except TimeoutError:
                 logging.error("PDF processing timeout")
@@ -327,13 +339,13 @@ def process_bill_ocr(file_path):
 
                 # Resize image if too large
                 width, height = image.size
-                if width > 1200 or height > 1200:  # Ridotto da 1500 a 1200
+                if width > 1200 or height > 1200:
                     ratio = min(1200/width, 1200/height)
                     new_size = (int(width * ratio), int(height * ratio))
                     image = image.resize(new_size, Image.Resampling.LANCZOS)
 
                 processed_image = preprocess_image(image)
-                text = process_image_with_timeout(processed_image, timeout_seconds=15)  # Ridotto timeout
+                text = process_image_with_timeout(processed_image, timeout_seconds=15)
 
             except TimeoutError:
                 logging.error("Image processing timeout")
