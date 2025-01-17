@@ -164,11 +164,10 @@ document.addEventListener('DOMContentLoaded', function() {
                 return;
             }
 
-            // Disable submit button to prevent double submission
+            // Disable submit button and show processing message
             const submitButton = form.querySelector('button[type="submit"]');
             submitButton.disabled = true;
-
-            showAlert('info', 'Elaborazione in corso...');
+            showAlert('info', 'Elaborazione in corso...', false);
 
             // First validate files are still valid
             if (!uploadedFiles.length) {
@@ -195,7 +194,8 @@ document.addEventListener('DOMContentLoaded', function() {
 
             console.log('Received response:', response.status);
             if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
+                const errorData = await response.json().catch(() => ({ error: 'Errore di rete' }));
+                throw new Error(`HTTP error! status: ${response.status}, ${errorData.error || 'Errore sconosciuto'}`);
             }
 
             const result = await response.json();
@@ -203,7 +203,15 @@ document.addEventListener('DOMContentLoaded', function() {
 
             if (result.success) {
                 console.log('Upload successful');
-                showAlert('success', 'File caricati con successo!');
+                showAlert('success', result.message);
+
+                // Show warnings if any
+                if (result.warnings && result.warnings.length > 0) {
+                    result.warnings.forEach(warning => {
+                        showAlert('warning', warning);
+                    });
+                }
+
                 resetForm();
             } else {
                 console.error('Upload failed:', result.error);
@@ -211,7 +219,7 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         } catch (error) {
             console.error('Upload error:', error);
-            showAlert('danger', 'Si è verificato un errore durante il caricamento');
+            showAlert('danger', 'Si è verificato un errore durante il caricamento: ' + error.message);
         } finally {
             // Re-enable submit button
             const submitButton = form.querySelector('button[type="submit"]');
@@ -231,7 +239,11 @@ document.addEventListener('DOMContentLoaded', function() {
         return true;
     }
 
-    function showAlert(type, message) {
+    function showAlert(type, message, autoHide = true) {
+        // Remove existing alert with the same type
+        const existingAlerts = document.querySelectorAll(`.alert-${type}`);
+        existingAlerts.forEach(alert => alert.remove());
+
         const alertDiv = document.createElement('div');
         alertDiv.className = `alert alert-${type} alert-dismissible fade show`;
         alertDiv.innerHTML = `
@@ -239,7 +251,14 @@ document.addEventListener('DOMContentLoaded', function() {
             <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
         `;
         document.querySelector('.alerts').appendChild(alertDiv);
-        setTimeout(() => alertDiv.remove(), 5000);
+
+        if (autoHide) {
+            setTimeout(() => {
+                if (alertDiv.parentElement) {
+                    alertDiv.remove();
+                }
+            }, 5000);
+        }
     }
 
     function resetForm() {

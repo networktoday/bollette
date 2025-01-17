@@ -51,7 +51,7 @@ def save_file(file):
         unique_filename = f"{uuid.uuid4()}_{filename}"
         file_path = os.path.join(app.config["UPLOAD_FOLDER"], unique_filename)
 
-        logging.debug(f"Attempting to save file to: {file_path}")
+        logging.info(f"Attempting to save file: {filename} to: {file_path}")
 
         # Check if the directory is writable
         if not os.access(os.path.dirname(file_path), os.W_OK):
@@ -61,7 +61,7 @@ def save_file(file):
         # Save the file
         try:
             file.save(file_path)
-            logging.debug(f"File saved successfully")
+            logging.info(f"File saved successfully: {file_path}")
         except Exception as e:
             logging.error(f"Error saving file: {str(e)}")
             return None
@@ -111,18 +111,23 @@ def upload():
 
         # Process each file
         saved_bills = []
-        for i, file in enumerate(files):
-            logging.info(f"Processing file {i+1}/{len(files)}: {file.filename}")
-
+        errors = []
+        for i, file in enumerate(files, 1):
             try:
+                logging.info(f"Processing file {i}/{len(files)}: {file.filename}")
+
                 if not file or not file.filename:
-                    logging.error(f"Invalid file at index {i}")
+                    msg = f"File {i} non valido"
+                    logging.error(msg)
+                    errors.append(msg)
                     continue
 
                 # Save the file
                 file_path = save_file(file)
                 if not file_path:
-                    logging.error(f"Failed to save file: {file.filename}")
+                    msg = f"Impossibile salvare il file: {file.filename}"
+                    logging.error(msg)
+                    errors.append(msg)
                     continue
 
                 # Process with OCR
@@ -130,16 +135,8 @@ def upload():
                 try:
                     cost_per_unit, detected_type = process_bill_ocr(file_path)
                     logging.info(f"OCR results - Cost per unit: {cost_per_unit}, Type: {detected_type}")
-                except Exception as ocr_error:
-                    logging.exception("OCR processing failed")
-                    continue
 
-                if detected_type == 'UNKNOWN':
-                    logging.warning(f"Could not detect bill type for file: {file.filename}")
-                    continue
-
-                # Create new bill record
-                try:
+                    # Create new bill record
                     bill = models.Bill(
                         phone=phone,
                         bill_type=detected_type,
@@ -149,17 +146,23 @@ def upload():
                     db.session.add(bill)
                     saved_bills.append(bill)
                     logging.info(f"Bill record created for file: {file.filename}")
-                except Exception as db_error:
-                    logging.exception("Failed to create bill record")
+
+                except Exception as ocr_error:
+                    error_msg = f"Errore nell'elaborazione del file {file.filename}: {str(ocr_error)}"
+                    logging.exception(error_msg)
+                    errors.append(error_msg)
                     continue
 
             except Exception as e:
-                logging.exception(f"Error processing file {file.filename if file else 'unknown'}")
+                error_msg = f"Errore generico per il file {file.filename}: {str(e)}"
+                logging.exception(error_msg)
+                errors.append(error_msg)
                 continue
 
         if not saved_bills:
-            logging.error("No bills were successfully processed")
-            return jsonify({"error": "Non è stato possibile elaborare nessuna bolletta"}), 400
+            error_message = "Errore nell'elaborazione delle bollette:\n" + "\n".join(errors)
+            logging.error(error_message)
+            return jsonify({"error": error_message}), 400
 
         # Commit all bills to database
         logging.info("Committing bills to database")
@@ -174,9 +177,12 @@ def upload():
         # Return success response with bill details
         response_data = {
             "success": True,
-            "message": "Bollette caricate con successo",
+            "message": f"Bollette caricate con successo: {len(saved_bills)} di {len(files)}",
             "bills": [bill.to_dict() for bill in saved_bills]
         }
+        if errors:
+            response_data["warnings"] = errors
+
         logging.info("Upload completed successfully")
         return jsonify(response_data)
 
