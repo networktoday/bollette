@@ -6,6 +6,7 @@ import logging
 import json
 from werkzeug.utils import secure_filename
 import uuid
+from utils import process_bill_ocr
 
 logging.basicConfig(level=logging.DEBUG)
 
@@ -65,12 +66,18 @@ def upload():
                 # Save the file
                 file_path = save_file(file)
                 if file_path:
+                    # Process with OCR
+                    cost_per_unit, detected_type = process_bill_ocr(file_path)
+
+                    # Use detected type if available, otherwise use client-side type
+                    final_type = detected_type if detected_type and detected_type != 'UNKNOWN' else bill_type
+
                     # Create new bill record
                     bill = models.Bill(
                         phone=phone,
-                        bill_type=bill_type,
+                        bill_type=final_type,
                         file_path=file_path,
-                        # cost_per_unit will be updated after OCR processing
+                        cost_per_unit=cost_per_unit
                     )
                     db.session.add(bill)
                     saved_bills.append(bill)
