@@ -6,6 +6,28 @@ import numpy as np
 from PIL import Image
 import pytesseract
 from pdf2image import convert_from_path
+import signal
+from contextlib import contextmanager
+import threading
+
+class OCRTimeoutError(Exception):
+    pass
+
+@contextmanager
+def timeout(seconds):
+    """Context manager for handling timeouts"""
+    def signal_handler(signum, frame):
+        raise OCRTimeoutError("OCR processing timed out")
+
+    # Set up the timeout signal
+    signal.signal(signal.SIGALRM, signal_handler)
+    signal.alarm(seconds)
+
+    try:
+        yield
+    finally:
+        # Disable the alarm
+        signal.alarm(0)
 
 def preprocess_image(image):
     """
@@ -182,7 +204,7 @@ def detect_bill_type(text):
         raise RuntimeError(f"Failed to detect bill type: {str(e)}")
 
 def process_bill_ocr(file_path):
-    """Process bill file with OCR using improved image processing"""
+    """Process bill file with OCR using improved image processing and timeout handling"""
     try:
         logging.info(f"Starting OCR processing for file: {file_path}")
 
@@ -200,25 +222,40 @@ def process_bill_ocr(file_path):
         if file_path.lower().endswith('.pdf'):
             try:
                 logging.info("Converting PDF to images")
-                # Increased DPI and using all pages for better accuracy
-                images = convert_from_path(file_path, dpi=300)
+                # Process only first 2 pages for better performance
+                images = convert_from_path(file_path, dpi=200, first_page=1, last_page=2)
 
                 if not images:
                     logging.error("Failed to convert PDF to images")
                     raise ValueError("Failed to convert PDF to images")
 
-                # Process all pages
+                # Process limited pages with timeout
+                successful_pages = 0
                 for page_num, image in enumerate(images, 1):
-                    logging.info(f"Processing page {page_num}/{len(images)}")
-                    processed_image = preprocess_image(image)
+                    try:
+                        logging.info(f"Processing page {page_num}/{len(images)}")
+                        processed_image = preprocess_image(image)
 
-                    # Configure tesseract for optimal results
-                    custom_config = r'--oem 3 --psm 6 -l ita+eng'
-                    page_text = pytesseract.image_to_string(processed_image, config=custom_config)
-                    text += page_text + "\n"
+                        with timeout(20):  # 20 seconds timeout per page
+                            custom_config = r'--oem 3 --psm 6 -l ita+eng'
+                            page_text = pytesseract.image_to_string(processed_image, config=custom_config)
+                            text += page_text + "\n"
+                            successful_pages += 1
+                            logging.debug(f"Successfully processed page {page_num}")
 
-                    # Log a sample of extracted text for debugging
-                    logging.debug(f"Sample text from page {page_num}: {page_text[:200]}...")
+                    except OCRTimeoutError:
+                        logging.warning(f"OCR timeout on page {page_num}, continuing with extracted text")
+                        if successful_pages > 0:  # If we have at least one page processed, continue
+                            break
+                        continue
+                    except Exception as e:
+                        logging.error(f"Error processing page {page_num}: {str(e)}")
+                        if successful_pages > 0:  # If we have at least one page processed, continue
+                            break
+                        continue
+
+                if successful_pages == 0:
+                    raise RuntimeError("Failed to process any pages successfully")
 
             except Exception as e:
                 logging.exception("Error processing PDF")
@@ -231,9 +268,13 @@ def process_bill_ocr(file_path):
                     image = image.convert('RGB')
                 processed_image = preprocess_image(image)
 
-                custom_config = r'--oem 3 --psm 6 -l ita+eng'
-                text = pytesseract.image_to_string(processed_image, config=custom_config)
+                with timeout(30):  # 30 seconds timeout for single image
+                    custom_config = r'--oem 3 --psm 6 -l ita+eng'
+                    text = pytesseract.image_to_string(processed_image, config=custom_config)
 
+            except OCRTimeoutError:
+                logging.error("OCR timeout processing image")
+                raise RuntimeError("OCR processing timed out")
             except Exception as e:
                 logging.exception("Error processing image")
                 raise RuntimeError(f"Image processing failed: {str(e)}")
