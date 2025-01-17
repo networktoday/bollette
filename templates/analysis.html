@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container mt-4">
+    <h1 class="text-center mb-4">Analisi delle Bollette</h1>
+
+    {% if error %}
+    <div class="alert alert-danger">
+        {{ error }}
+    </div>
+    {% else %}
+    <div class="row">
+        <!-- Distribuzione tipi di bollette -->
+        <div class="col-md-6 mb-4">
+            <div class="card">
+                <div class="card-body">
+                    <h5 class="card-title">Distribuzione Tipi di Bollette</h5>
+                    <canvas id="billTypeChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <!-- Costo medio per unità -->
+        <div class="col-md-6 mb-4">
+            <div class="card">
+                <div class="card-body">
+                    <h5 class="card-title">Costo Medio per Unità</h5>
+                    <canvas id="avgCostChart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bollette Recenti -->
+    <div class="card mb-4">
+        <div class="card-body">
+            <h5 class="card-title">Bollette Recenti</h5>
+            <div class="table-responsive">
+                <table class="table table-striped">
+                    <thead>
+                        <tr>
+                            <th>Tipo</th>
+                            <th>Telefono</th>
+                            <th>Costo per Unità</th>
+                            <th>Data</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    {% for bill in recent_bills %}
+                        <tr>
+                            <td>{{ bill.bill_type }}</td>
+                            <td>{{ bill.phone }}</td>
+                            <td>{% if bill.cost_per_unit %}€ {{ "%.2f"|format(bill.cost_per_unit) }}{% else %}N/D{% endif %}</td>
+                            <td>{{ bill.created_at.strftime('%d/%m/%Y') }}</td>
+                        </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Bill Type Distribution Chart
+    const billTypeCtx = document.getElementById('billTypeChart').getContext('2d');
+    new Chart(billTypeCtx, {
+        type: 'pie',
+        data: {
+            labels: [{% for type, count in bill_types %}'{{ type }}',{% endfor %}],
+            datasets: [{
+                data: [{% for type, count in bill_types %}{{ count }},{% endfor %}],
+                backgroundColor: [
+                    'rgba(255, 99, 132, 0.8)',
+                    'rgba(54, 162, 235, 0.8)',
+                    'rgba(255, 206, 86, 0.8)'
+                ]
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: {
+                legend: {
+                    position: 'bottom'
+                }
+            }
+        }
+    });
+
+    // Average Cost Chart
+    const avgCostCtx = document.getElementById('avgCostChart').getContext('2d');
+    new Chart(avgCostCtx, {
+        type: 'bar',
+        data: {
+            labels: [{% for type, avg in avg_costs %}'{{ type }}',{% endfor %}],
+            datasets: [{
+                label: 'Costo Medio per Unità (€)',
+                data: [{% for type, avg in avg_costs %}{{ avg if avg else 0 }},{% endfor %}],
+                backgroundColor: 'rgba(75, 192, 192, 0.8)'
+            }]
+        },
+        options: {
+            responsive: true,
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    ticks: {
+                        callback: function(value) {
+                            return '€' + value.toFixed(2);
+                        }
+                    }
+                }
+            }
+        }
+    });
+});
+</script>
+{% endblock %}
