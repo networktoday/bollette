@@ -20,21 +20,22 @@ def preprocess_image(image):
         # Convert to grayscale
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-        # Apply adaptive thresholding
+        # Apply adaptive thresholding with optimized parameters
         binary = cv2.adaptiveThreshold(
-            gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2
+            gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 15, 2
         )
 
-        # Noise removal with different kernel sizes
-        denoised = cv2.fastNlMeansDenoising(binary)
+        # Enhanced denoising
+        denoised = cv2.fastNlMeansDenoising(binary, None, 10, 7, 21)
 
-        # Increase contrast
-        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
+        # Increase contrast with optimized parameters
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(16,16))
         enhanced = clahe.apply(denoised)
 
-        # Morphological operations to improve text clarity
-        kernel = np.ones((1,1), np.uint8)
+        # Morphological operations for better text clarity
+        kernel = np.ones((2,2), np.uint8)
         enhanced = cv2.morphologyEx(enhanced, cv2.MORPH_CLOSE, kernel)
+        enhanced = cv2.morphologyEx(enhanced, cv2.MORPH_OPEN, kernel)
 
         # Convert back to PIL Image
         enhanced_pil = Image.fromarray(enhanced)
@@ -104,33 +105,51 @@ def detect_bill_type(text):
 
     text = text.lower()
 
-    # Define Italian and English terms for each type
+    # Enhanced list of Italian and English terms for each type
     gas_terms = [
         'gas', 'cubic meter', 'm³', 'mc', 'metano', 'consumo gas',
         'lettura gas', 'fornitura gas', 'gas naturale', 'smc', 'standard m³',
         'metri cubi', 'metro cubo', 'materia gas', 'importi gas',
         'consumi gas', 'bolletta gas', 'gas naturale', 'riepilogo gas',
-        'spesa materia gas', 'consumo metri cubi'
+        'spesa materia gas', 'consumo metri cubi', 'prelievo gas',
+        'costo gas', 'tariffa gas', 'spesa gas', 'quota gas',
+        'valore gas', 'volume gas', 'gas consumato', 'componente gas'
     ]
     electricity_terms = [
         'electricity', 'electric', 'kw', 'kwh', 'kilowatt',
         'energia elettrica', 'consumo energia', 'luce', 'elettricità',
         'potenza', 'lettura energia', 'energia', 'corrente elettrica',
         'materia energia', 'importi energia', 'riepilogo energia',
-        'spesa energia', 'f1', 'f2', 'f3', 'fascia oraria'
+        'spesa energia', 'f1', 'f2', 'f3', 'fascia oraria',
+        'consumo elettrico', 'costo energia', 'tariffa energia',
+        'spesa energia', 'quota energia', 'potenza impegnata',
+        'energia attiva', 'energia reattiva', 'lettura elettrica'
     ]
 
-    # Count occurrences of terms
-    gas_count = sum(1 for term in gas_terms if term in text)
-    electricity_count = sum(1 for term in electricity_terms if term in text)
+    # Count occurrences of terms with context
+    gas_count = 0
+    electricity_count = 0
 
-    # Log found terms for debugging
+    # Analyze each line separately for better context
+    lines = text.split('\n')
+    for line in lines:
+        # Check for gas terms
+        if any(term in line for term in gas_terms):
+            gas_count += 1
+            logging.debug(f"Found gas term in line: {line}")
+
+        # Check for electricity terms
+        if any(term in line for term in electricity_terms):
+            electricity_count += 1
+            logging.debug(f"Found electricity term in line: {line}")
+
+    # Log detailed findings
     logging.debug(f"Gas terms found: {gas_count}")
     logging.debug(f"Found gas terms: {[term for term in gas_terms if term in text]}")
     logging.debug(f"Electricity terms found: {electricity_count}")
     logging.debug(f"Found electricity terms: {[term for term in electricity_terms if term in text]}")
 
-    # If we find any combination of gas and electricity terms, it's a MIX bill
+    # Enhanced decision logic
     if gas_count > 0 and electricity_count > 0:
         logging.info("Detected bill type: MIX (contains both gas and electricity terms)")
         return 'MIX'
@@ -142,6 +161,7 @@ def detect_bill_type(text):
         return 'LUCE'
 
     logging.warning("Could not determine bill type")
+    logging.debug(f"Full text analyzed: {text}")
     return 'UNKNOWN'
 
 def process_bill_ocr(file_path):
@@ -166,14 +186,30 @@ def process_bill_ocr(file_path):
             try:
                 logging.info("Converting PDF to image")
                 # Increased DPI for better quality
-                images = convert_from_path(file_path, dpi=300, first_page=1, last_page=1)
+                images = convert_from_path(file_path, dpi=400, first_page=1, last_page=3)
                 if not images:
                     logging.error("Failed to convert PDF to image")
                     return None, None
-                image = images[0]
-                logging.info("PDF converted to image successfully")
+
+                # Process multiple pages if available
+                text = ""
+                for page_num, image in enumerate(images, 1):
+                    logging.info(f"Processing page {page_num}")
+                    processed_image = preprocess_image(image)
+                    if processed_image is None:
+                        continue
+
+                    # Configure tesseract for better accuracy
+                    custom_config = f'--oem 3 --psm 6 -l ita+eng'
+                    page_text = pytesseract.image_to_string(processed_image, config=custom_config)
+                    text += page_text + "\n"
+
+                if not text.strip():
+                    logging.error("No text extracted from any page")
+                    return None, None
+
             except Exception as e:
-                logging.exception("Error converting PDF to image")
+                logging.exception("Error processing PDF")
                 return None, None
         else:
             try:
@@ -181,52 +217,23 @@ def process_bill_ocr(file_path):
                 image = Image.open(file_path)
                 if image.mode != 'RGB':
                     image = image.convert('RGB')
-                logging.info(f"Image opened successfully: size={image.size}, mode={image.mode}")
+                processed_image = preprocess_image(image)
+                if processed_image is None:
+                    return None, None
+
+                custom_config = '--oem 3 --psm 6 -l ita+eng'
+                text = pytesseract.image_to_string(processed_image, config=custom_config)
+
             except Exception as e:
-                logging.exception("Error opening image file")
+                logging.exception("Error processing image")
                 return None, None
 
-        # Pre-process the image
-        processed_image = preprocess_image(image)
-        if processed_image is None:
-            logging.error("Image pre-processing failed")
-            return None, None
-
-        # Perform OCR with multiple attempts
+        # Extract information with enhanced logging
         try:
-            logging.info("Starting OCR text extraction")
+            logging.info("Extracting information from OCR text")
+            logging.debug(f"Extracted text length: {len(text)}")
+            logging.debug(f"First 500 characters: {text[:500]}")
 
-            # Configure tesseract for better accuracy
-            custom_config = r'--oem 3 --psm 6'
-
-            # Try different approaches
-            text = None
-            for psm in [6, 3, 4]:  # Different page segmentation modes
-                try:
-                    config = f'--oem 3 --psm {psm}'
-                    current_text = pytesseract.image_to_string(processed_image, config=config)
-                    if current_text.strip():
-                        text = current_text
-                        logging.info(f"Successful OCR with PSM {psm}")
-                        break
-                except Exception as e:
-                    logging.warning(f"OCR attempt failed with PSM {psm}: {str(e)}")
-                    continue
-
-            if not text:
-                logging.error("All OCR attempts failed")
-                return None, None
-
-            text_length = len(text)
-            logging.info(f"OCR completed, extracted {text_length} characters")
-            logging.debug(f"First 200 characters of extracted text: {text[:200]}")
-
-        except Exception as e:
-            logging.exception("Error during OCR processing")
-            return None, None
-
-        # Extract information
-        try:
             cost_per_unit = extract_cost_per_unit(text)
             bill_type = detect_bill_type(text)
 
