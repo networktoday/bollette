@@ -3,6 +3,7 @@ from flask import Flask, render_template, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.orm import DeclarativeBase
 import logging
+import json
 
 logging.basicConfig(level=logging.DEBUG)
 
@@ -18,7 +19,7 @@ app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
     "pool_recycle": 300,
     "pool_pre_ping": True,
 }
-app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16MB max file size
+app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024 * 10  # 160MB max-size (10 files * 16MB)
 
 db.init_app(app)
 
@@ -30,18 +31,25 @@ def index():
 def upload():
     try:
         phone = request.form.get("phone")
-        bill_type = request.form.get("billType")
-        file = request.files.get("file")
-        
-        if not all([phone, bill_type, file]):
+        bill_types = json.loads(request.form.get("billTypes", "[]"))
+        files = request.files.getlist("files[]")
+
+        if not phone or not files:
             return jsonify({"error": "Missing required fields"}), 400
 
-        # Save file and process with OCR
-        # In a real implementation, we'd save the file and process it
-        
+        if len(files) != len(bill_types):
+            return jsonify({"error": "Mismatch between files and bill types"}), 400
+
+        # Process each file
+        for file, bill_type in zip(files, bill_types):
+            if file:
+                # Here you would save the file and process it
+                # In a real implementation, we'd save each file and process it
+                logging.debug(f"Processing file: {file.filename}, type: {bill_type}")
+
         return jsonify({
             "success": True,
-            "message": "Bill uploaded successfully"
+            "message": "Bills uploaded successfully"
         })
     except Exception as e:
         logging.error(f"Upload error: {str(e)}")

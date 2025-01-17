@@ -5,6 +5,10 @@ document.addEventListener('DOMContentLoaded', function() {
     const form = document.getElementById('upload-form');
     const phoneInput = document.getElementById('phone');
 
+    // Store uploaded files and their bill types
+    let uploadedFiles = [];
+    let billTypes = {};
+
     // Drag and drop handling
     ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
         dropZone.addEventListener(eventName, preventDefaults, false);
@@ -36,23 +40,23 @@ document.addEventListener('DOMContentLoaded', function() {
     function handleDrop(e) {
         const dt = e.dataTransfer;
         const files = dt.files;
-        handleFiles(files);
+        handleFiles(Array.from(files));
     }
 
     fileInput.addEventListener('change', function() {
-        handleFiles(this.files);
+        handleFiles(Array.from(this.files));
     });
 
     function handleFiles(files) {
-        if (files.length > 0) {
-            const file = files[0];
+        files.forEach(file => {
             console.log('File selected:', file.name, file.type);
             if (validateFile(file)) {
-                displayPreview(file);
+                uploadedFiles.push(file);
+                displayPreview(file, uploadedFiles.length - 1);
                 // Process OCR in background
-                setTimeout(() => processBillOCR(file), 100);
+                setTimeout(() => processBillOCR(file, uploadedFiles.length - 1), 100);
             }
-        }
+        });
     }
 
     function validateFile(file) {
@@ -68,14 +72,14 @@ document.addEventListener('DOMContentLoaded', function() {
         return true;
     }
 
-    function displayPreview(file) {
+    function displayPreview(file, index) {
         console.log('Displaying preview for:', file.name);
 
         if (file.type.startsWith('image/')) {
             const reader = new FileReader();
             reader.onload = function(e) {
                 console.log('FileReader loaded successfully');
-                preview.innerHTML = createPreviewHTML(e.target.result, 'image');
+                appendPreviewHTML(createPreviewHTML(e.target.result, 'image', index));
             };
             reader.onerror = function(e) {
                 console.error('FileReader error:', e);
@@ -91,22 +95,19 @@ document.addEventListener('DOMContentLoaded', function() {
                     const page = await pdf.getPage(1);
                     const viewport = page.getViewport({ scale: 0.5 });
 
-                    // Create canvas for PDF rendering
                     const canvas = document.createElement('canvas');
                     canvas.height = viewport.height;
                     canvas.width = viewport.width;
 
-                    // Render PDF page to canvas
                     await page.render({
                         canvasContext: canvas.getContext('2d'),
                         viewport: viewport
                     }).promise;
 
-                    preview.innerHTML = createPreviewHTML(canvas.toDataURL(), 'pdf');
+                    appendPreviewHTML(createPreviewHTML(canvas.toDataURL(), 'pdf', index));
                 } catch (error) {
                     console.error('PDF preview error:', error);
-                    // Fallback to PDF icon if preview fails
-                    preview.innerHTML = createPreviewHTML(null, 'pdf-fallback', file.name);
+                    appendPreviewHTML(createPreviewHTML(null, 'pdf-fallback', index, file.name));
                 }
             };
             reader.onerror = function(e) {
@@ -117,7 +118,13 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
-    function createPreviewHTML(src, type, filename = '') {
+    function appendPreviewHTML(html) {
+        const div = document.createElement('div');
+        div.innerHTML = html;
+        preview.appendChild(div.firstElementChild);
+    }
+
+    function createPreviewHTML(src, type, index, filename = '') {
         let previewContent = '';
         switch (type) {
             case 'image':
@@ -134,15 +141,35 @@ document.addEventListener('DOMContentLoaded', function() {
         }
 
         return `
-            <div class="preview-item">
+            <div class="preview-item" data-index="${index}">
                 ${previewContent}
-                <button type="button" class="btn btn-danger btn-sm delete-preview" onclick="document.getElementById('preview').innerHTML = '';">
+                <button type="button" class="btn btn-danger btn-sm delete-preview" onclick="removeFile(${index})">
                     <i class="fas fa-trash"></i>
                 </button>
             </div>`;
     }
 
-    async function processBillOCR(file) {
+    // Add this function to the global scope for the onclick handler
+    window.removeFile = function(index) {
+        uploadedFiles = uploadedFiles.filter((_, i) => i !== index);
+        delete billTypes[index];
+        updateBillTypesInput();
+        refreshPreviews();
+    };
+
+    function refreshPreviews() {
+        preview.innerHTML = '';
+        uploadedFiles.forEach((file, index) => {
+            displayPreview(file, index);
+        });
+    }
+
+    function updateBillTypesInput() {
+        const types = uploadedFiles.map((_, index) => billTypes[index] || 'UNKNOWN');
+        document.getElementById('billTypes').value = JSON.stringify(types);
+    }
+
+    async function processBillOCR(file, index) {
         try {
             const worker = await Tesseract.createWorker({
                 logger: m => console.log(m)
@@ -154,9 +181,9 @@ document.addEventListener('DOMContentLoaded', function() {
 
             if (file.type.startsWith('image/')) {
                 const { data: { text } } = await worker.recognize(file);
-                const billType = detectBillType(text);
-                document.getElementById('billType').value = billType;
-                console.log('OCR completed, bill type:', billType);
+                billTypes[index] = detectBillType(text);
+                updateBillTypesInput();
+                console.log('OCR completed, bill type:', billTypes[index]);
             }
 
             await worker.terminate();
@@ -183,7 +210,13 @@ document.addEventListener('DOMContentLoaded', function() {
 
         if (!validateForm()) return;
 
-        const formData = new FormData(form);
+        const formData = new FormData();
+        formData.append('phone', phoneInput.value);
+        formData.append('billTypes', document.getElementById('billTypes').value);
+        uploadedFiles.forEach((file, index) => {
+            formData.append('files[]', file);
+        });
+
         try {
             const response = await fetch('/upload', {
                 method: 'POST',
@@ -192,7 +225,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
             const result = await response.json();
             if (result.success) {
-                showAlert('success', 'File caricato con successo!');
+                showAlert('success', 'File caricati con successo!');
                 resetForm();
             } else {
                 showAlert('danger', result.error || 'Caricamento fallito');
@@ -208,8 +241,8 @@ document.addEventListener('DOMContentLoaded', function() {
             showAlert('danger', 'Inserisci un numero di telefono');
             return false;
         }
-        if (!fileInput.files.length) {
-            showAlert('danger', 'Seleziona un file');
+        if (!uploadedFiles.length) {
+            showAlert('danger', 'Seleziona almeno un file');
             return false;
         }
         return true;
@@ -229,5 +262,8 @@ document.addEventListener('DOMContentLoaded', function() {
     function resetForm() {
         form.reset();
         preview.innerHTML = '';
+        uploadedFiles = [];
+        billTypes = {};
+        updateBillTypesInput();
     }
 });
