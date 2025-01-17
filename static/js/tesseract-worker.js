@@ -22,8 +22,43 @@ let recognizeText = async (image) => {
             tessedit_pageseg_mode: '6'
         });
 
-        // Perform OCR
-        const { data: { text, confidence } } = await worker.recognize(image);
+        let text = '';
+        let confidence = 0;
+
+        if (image instanceof ArrayBuffer) {
+            // Handle PDF file
+            const typedarray = new Uint8Array(image);
+            const pdf = await pdfjsLib.getDocument(typedarray).promise;
+            const numPages = pdf.numPages;
+            console.log(`Processing PDF with ${numPages} pages`);
+
+            // Process all pages
+            for (let pageNum = 1; pageNum <= numPages; pageNum++) {
+                console.log(`Processing page ${pageNum}/${numPages}`);
+                const page = await pdf.getPage(pageNum);
+                const viewport = page.getViewport({ scale: 2.0 }); // Increased scale for better quality
+
+                const canvas = new OffscreenCanvas(viewport.width, viewport.height);
+                const context = canvas.getContext('2d');
+
+                await page.render({
+                    canvasContext: context,
+                    viewport: viewport
+                }).promise;
+
+                const { data: pageData } = await worker.recognize(canvas);
+                text += pageData.text + '\n';
+                confidence += pageData.confidence;
+            }
+
+            // Average confidence across all pages
+            confidence = confidence / numPages;
+        } else {
+            // Handle image file
+            const { data } = await worker.recognize(image);
+            text = data.text;
+            confidence = data.confidence;
+        }
 
         // Extract utility bill specific information
         const result = {
