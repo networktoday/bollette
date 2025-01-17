@@ -56,8 +56,8 @@ def process_image_with_timeout(image, timeout_seconds=15):
             raise OCRTimeoutError(f"OCR processing timed out after {timeout_seconds} seconds")
 
 def preprocess_image(image):
-    """Pre-process the image to improve OCR accuracy"""
-    logging.info("Starting image pre-processing")
+    """Pre-process the image to improve OCR accuracy with optimized settings"""
+    logging.info("Starting optimized image pre-processing")
     try:
         # Convert PIL Image to cv2 format if needed
         if isinstance(image, Image.Image):
@@ -66,25 +66,18 @@ def preprocess_image(image):
         # Convert to grayscale
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-        # Apply multiple preprocessing techniques
-        # 1. Noise reduction
-        denoised = cv2.fastNlMeansDenoising(gray)
-
-        # 2. Increase contrast
+        # Apply optimized preprocessing
+        # 1. Enhanced contrast using CLAHE
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-        contrasted = clahe.apply(denoised)
+        contrasted = clahe.apply(gray)
 
-        # 3. Thresholding
+        # 2. Optimized thresholding
         _, binary = cv2.threshold(contrasted, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
-        # 4. Dilation to make text more prominent
-        kernel = np.ones((1,1), np.uint8)
-        dilated = cv2.dilate(binary, kernel, iterations=1)
-
         # Convert back to PIL Image
-        enhanced_pil = Image.fromarray(dilated)
+        enhanced_pil = Image.fromarray(binary)
 
-        logging.info("Image pre-processing completed successfully")
+        logging.info("Optimized image pre-processing completed")
         return enhanced_pil
     except Exception as e:
         logging.exception("Error during image pre-processing")
@@ -273,10 +266,41 @@ def detect_bill_type(text):
         # Instead of raising an error, return UNKNOWN to allow processing to continue
         return 'UNKNOWN'
 
+def process_pages_parallel(images, max_workers=4):
+    """Process multiple pages in parallel"""
+    results = []
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = []
+        for i, image in enumerate(images, 1):
+            # Resize image if too large
+            width, height = image.size
+            if width > 1000 or height > 1000:  # Reduced from 1200 to 1000
+                ratio = min(1000/width, 1000/height)
+                new_size = (int(width * ratio), int(height * ratio))
+                image = image.resize(new_size, Image.Resampling.LANCZOS)
+
+            processed_image = preprocess_image(image)
+            future = executor.submit(process_image_with_timeout, processed_image, 10)  # Reduced timeout
+            futures.append(future)
+
+        for i, future in enumerate(futures, 1):
+            try:
+                result = future.result()
+                if result.strip():
+                    results.append(result)
+                    logging.info(f"Successfully processed page {i}")
+                else:
+                    logging.warning(f"No text extracted from page {i}")
+            except Exception as e:
+                logging.error(f"Error processing page {i}: {str(e)}")
+                continue
+
+    return results
+
 def process_bill_ocr(file_path):
-    """Process bill file with OCR using improved image processing and timeout handling"""
+    """Process bill file with OCR using optimized settings"""
     try:
-        logging.info(f"Starting OCR processing for file: {file_path}")
+        logging.info(f"Starting optimized OCR processing for file: {file_path}")
 
         # Validate file
         if not os.path.exists(file_path):
@@ -289,39 +313,20 @@ def process_bill_ocr(file_path):
 
         text = ""
 
-        # Process PDF or image with reduced timeout
+        # Process PDF or image with optimized settings
         if file_path.lower().endswith('.pdf'):
             try:
-                logging.info("Converting PDF to images")
-                # Process all pages of the PDF
-                images = convert_from_path(file_path, dpi=150)
+                logging.info("Converting PDF to images with optimized settings")
+                # Reduced DPI from 150 to 100 for faster processing
+                images = convert_from_path(file_path, dpi=100)
 
                 if not images:
                     logging.error("Failed to convert PDF to images")
                     raise ValueError("Failed to convert PDF to images")
 
-                logging.info(f"Processing {len(images)} pages from PDF")
-                all_text = []
-
-                for i, image in enumerate(images, 1):
-                    logging.info(f"Processing page {i}/{len(images)}")
-                    # Resize image if too large
-                    width, height = image.size
-                    if width > 1200 or height > 1200:
-                        ratio = min(1200/width, 1200/height)
-                        new_size = (int(width * ratio), int(height * ratio))
-                        image = image.resize(new_size, Image.Resampling.LANCZOS)
-
-                    processed_image = preprocess_image(image)
-                    page_text = process_image_with_timeout(processed_image, timeout_seconds=15)
-                    if page_text.strip():
-                        all_text.append(page_text)
-                        logging.info(f"Successfully extracted text from page {i}")
-                    else:
-                        logging.warning(f"No text extracted from page {i}")
-
-                text = "\n".join(all_text)
-                logging.info(f"Combined text from all {len(images)} pages")
+                logging.info(f"Processing {len(images)} pages in parallel")
+                text_parts = process_pages_parallel(images)
+                text = "\n".join(text_parts)
 
             except TimeoutError:
                 logging.error("PDF processing timeout")
@@ -332,20 +337,20 @@ def process_bill_ocr(file_path):
 
         else:
             try:
-                logging.info("Processing image file")
+                logging.info("Processing image file with optimized settings")
                 image = Image.open(file_path)
                 if image.mode != 'RGB':
                     image = image.convert('RGB')
 
-                # Resize image if too large
+                # Resize with optimized dimensions
                 width, height = image.size
-                if width > 1200 or height > 1200:
-                    ratio = min(1200/width, 1200/height)
+                if width > 1000 or height > 1000:  # Reduced from 1200 to 1000
+                    ratio = min(1000/width, 1000/height)
                     new_size = (int(width * ratio), int(height * ratio))
                     image = image.resize(new_size, Image.Resampling.LANCZOS)
 
                 processed_image = preprocess_image(image)
-                text = process_image_with_timeout(processed_image, timeout_seconds=15)
+                text = process_image_with_timeout(processed_image, timeout_seconds=10)  # Reduced timeout
 
             except TimeoutError:
                 logging.error("Image processing timeout")
