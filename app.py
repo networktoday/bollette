@@ -4,6 +4,8 @@ from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.orm import DeclarativeBase
 import logging
 import json
+from werkzeug.utils import secure_filename
+import uuid
 
 logging.basicConfig(level=logging.DEBUG)
 
@@ -20,8 +22,24 @@ app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
     "pool_pre_ping": True,
 }
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024 * 10  # 160MB max-size (10 files * 16MB)
+app.config["UPLOAD_FOLDER"] = "uploads"
+
+# Ensure upload directory exists
+if not os.path.exists(app.config["UPLOAD_FOLDER"]):
+    os.makedirs(app.config["UPLOAD_FOLDER"])
 
 db.init_app(app)
+
+def save_file(file):
+    """Save uploaded file and return the file path"""
+    if file:
+        # Generate unique filename to prevent collisions
+        filename = secure_filename(file.filename)
+        unique_filename = f"{uuid.uuid4()}_{filename}"
+        file_path = os.path.join(app.config["UPLOAD_FOLDER"], unique_filename)
+        file.save(file_path)
+        return file_path
+    return None
 
 @app.route("/")
 def index():
@@ -41,15 +59,30 @@ def upload():
             return jsonify({"error": "Mismatch between files and bill types"}), 400
 
         # Process each file
+        saved_bills = []
         for file, bill_type in zip(files, bill_types):
             if file:
-                # Here you would save the file and process it
-                # In a real implementation, we'd save each file and process it
-                logging.debug(f"Processing file: {file.filename}, type: {bill_type}")
+                # Save the file
+                file_path = save_file(file)
+                if file_path:
+                    # Create new bill record
+                    bill = models.Bill(
+                        phone=phone,
+                        bill_type=bill_type,
+                        file_path=file_path,
+                        # cost_per_unit will be updated after OCR processing
+                    )
+                    db.session.add(bill)
+                    saved_bills.append(bill)
 
+        # Commit all bills to database
+        db.session.commit()
+
+        # Return success response with bill IDs
         return jsonify({
             "success": True,
-            "message": "Bills uploaded successfully"
+            "message": "Bills uploaded successfully",
+            "bills": [bill.to_dict() for bill in saved_bills]
         })
     except Exception as e:
         logging.error(f"Upload error: {str(e)}")
