@@ -120,7 +120,12 @@ def detect_bill_type(text):
         'spesa materia gas', 'consumo metri cubi', 'prelievo gas',
         'costo gas', 'tariffa gas', 'spesa gas', 'quota gas',
         'valore gas', 'volume gas', 'gas consumato', 'componente gas',
-        'fornitura di gas', 'servizio gas', 'importo gas', 'letture gas'
+        'fornitura di gas', 'servizio gas', 'importo gas', 'letture gas',
+        'Smc', 'SMC', 'smc', 'Standard metro cubo',  # Aggiunti termini tecnici per il gas
+        'PCS', 'potere calorifico superiore',        # Termini tecnici aggiuntivi
+        'coefficiente C', 'coefficiente M',          # Coefficienti di conversione gas
+        'lettura precedente mc', 'lettura attuale mc',
+        'consumo mc', 'consumo smc'
     ]
 
     electricity_terms = [
@@ -156,38 +161,52 @@ def detect_bill_type(text):
         electricity_found = []
         mix_found = []
 
+        # First check for explicit SMC values which strongly indicate gas presence
+        smc_pattern = r'\d+(?:[.,]\d+)?\s*(?:smc|Smc|SMC)'
+        if re.search(smc_pattern, text):
+            logging.info("Found SMC measurement in text - strong indicator of gas presence")
+            gas_found.append('smc_measurement')
+
         for section in sections:
             # Check for mix terms first
             section_mix_terms = [term for term in mix_terms if term in section]
             if section_mix_terms:
                 mix_found.extend(section_mix_terms)
                 logging.info(f"Found mix terms in section: {section_mix_terms}")
-                # If we find explicit mix terms, we can return immediately
-                if mix_found:
-                    logging.info("Detected bill type: MIX (explicit mix terms found)")
-                    return 'MIX'
 
             # Check for gas terms
             section_gas_terms = [term for term in gas_terms if term in section]
-            gas_found.extend(section_gas_terms)
+            if section_gas_terms:
+                gas_found.extend(section_gas_terms)
+                logging.info(f"Found gas terms in section: {section_gas_terms}")
 
             # Check for electricity terms
             section_electricity_terms = [term for term in electricity_terms if term in section]
-            electricity_found.extend(section_electricity_terms)
+            if section_electricity_terms:
+                electricity_found.extend(section_electricity_terms)
+                logging.info(f"Found electricity terms in section: {section_electricity_terms}")
 
         # Count unique terms found
         unique_gas_terms = len(set(gas_found))
         unique_electricity_terms = len(set(electricity_found))
+        unique_mix_terms = len(set(mix_found))
 
         # Log detailed findings
         logging.info(f"Unique gas terms found: {unique_gas_terms}")
         logging.info(f"Gas terms: {set(gas_found)}")
         logging.info(f"Unique electricity terms found: {unique_electricity_terms}")
         logging.info(f"Electricity terms: {set(electricity_found)}")
+        logging.info(f"Unique mix terms found: {unique_mix_terms}")
+        logging.info(f"Mix terms: {set(mix_found)}")
 
         # Enhanced decision logic with weighted scoring
-        # If we find both gas and electricity terms, it's likely a MIX bill
-        if unique_gas_terms > 0 and unique_electricity_terms > 0:
+        if unique_mix_terms > 0:
+            logging.info("Detected bill type: MIX (explicit mix terms found)")
+            return 'MIX'
+        elif 'smc_measurement' in gas_found:
+            logging.info("Detected bill type: MIX (SMC measurement found with electricity terms)")
+            return 'MIX'
+        elif unique_gas_terms > 0 and unique_electricity_terms > 0:
             logging.info(f"Detected bill type: MIX (gas terms: {unique_gas_terms}, electricity terms: {unique_electricity_terms})")
             return 'MIX'
         elif unique_gas_terms > 0:
