@@ -43,12 +43,12 @@ ELECTRICITY_TERMS = [
 class OCRTimeoutError(Exception):
     pass
 
-def process_image_with_timeout(image, timeout_seconds=15):
+def process_image_with_timeout(image, timeout_seconds=5):  # Reduced from 10 to 5 seconds
     """Process a single image with OCR and timeout"""
     with ThreadPoolExecutor(max_workers=1) as executor:
         future = executor.submit(pytesseract.image_to_string, 
                                  image, 
-                                 config=r'--oem 3 --psm 6 -l ita+eng')
+                                 config=r'--oem 1 --psm 6 -l ita+eng')  # Changed from oem 3 to oem 1 for speed
         try:
             return future.result(timeout=timeout_seconds)
         except TimeoutError:
@@ -66,13 +66,8 @@ def preprocess_image(image):
         # Convert to grayscale
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-        # Apply optimized preprocessing
-        # 1. Enhanced contrast using CLAHE
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-        contrasted = clahe.apply(gray)
-
-        # 2. Optimized thresholding
-        _, binary = cv2.threshold(contrasted, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        # Simple thresholding only - removed CLAHE for speed
+        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
         # Convert back to PIL Image
         enhanced_pil = Image.fromarray(binary)
@@ -272,15 +267,15 @@ def process_pages_parallel(images, max_workers=4):
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = []
         for i, image in enumerate(images, 1):
-            # Resize image if too large
+            # Resize image if too large - reduced max size from 1000 to 800
             width, height = image.size
-            if width > 1000 or height > 1000:  # Reduced from 1200 to 1000
-                ratio = min(1000/width, 1000/height)
+            if width > 800 or height > 800:
+                ratio = min(800/width, 800/height)
                 new_size = (int(width * ratio), int(height * ratio))
                 image = image.resize(new_size, Image.Resampling.LANCZOS)
 
             processed_image = preprocess_image(image)
-            future = executor.submit(process_image_with_timeout, processed_image, 10)  # Reduced timeout
+            future = executor.submit(process_image_with_timeout, processed_image, 5)  # Reduced timeout to 5 seconds
             futures.append(future)
 
         for i, future in enumerate(futures, 1):
@@ -344,13 +339,13 @@ def process_bill_ocr(file_path):
 
                 # Resize with optimized dimensions
                 width, height = image.size
-                if width > 1000 or height > 1000:  # Reduced from 1200 to 1000
-                    ratio = min(1000/width, 1000/height)
+                if width > 800 or height > 800:  #Reduced from 1000 to 800
+                    ratio = min(800/width, 800/height)
                     new_size = (int(width * ratio), int(height * ratio))
                     image = image.resize(new_size, Image.Resampling.LANCZOS)
 
                 processed_image = preprocess_image(image)
-                text = process_image_with_timeout(processed_image, timeout_seconds=10)  # Reduced timeout
+                text = process_image_with_timeout(processed_image, timeout_seconds=5)  # Reduced timeout
 
             except TimeoutError:
                 logging.error("Image processing timeout")
