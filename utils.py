@@ -6,36 +6,28 @@ import numpy as np
 from PIL import Image
 import pytesseract
 from pdf2image import convert_from_path
-import signal
-from contextlib import contextmanager
 import threading
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 
 class OCRTimeoutError(Exception):
     pass
 
-@contextmanager
-def timeout(seconds):
-    """Context manager for handling timeouts"""
-    def signal_handler(signum, frame):
-        raise OCRTimeoutError("OCR processing timed out")
-
-    # Set up the timeout signal
-    signal.signal(signal.SIGALRM, signal_handler)
-    signal.alarm(seconds)
-
-    try:
-        yield
-    finally:
-        # Disable the alarm
-        signal.alarm(0)
+def process_image_with_timeout(image, timeout_seconds=30):
+    """Process a single image with OCR and timeout"""
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(pytesseract.image_to_string, 
+                               image, 
+                               config=r'--oem 3 --psm 6 -l ita+eng')
+        try:
+            return future.result(timeout=timeout_seconds)
+        except TimeoutError:
+            raise OCRTimeoutError("OCR processing timed out")
 
 def preprocess_image(image):
-    """
-    Pre-process the image to improve OCR accuracy with enhanced number detection
-    """
+    """Pre-process the image to improve OCR accuracy"""
     logging.info("Starting image pre-processing")
     try:
-        # Convert PIL Image to cv2 format
+        # Convert PIL Image to cv2 format if needed
         if isinstance(image, Image.Image):
             image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
 
@@ -43,32 +35,17 @@ def preprocess_image(image):
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
         # Apply advanced preprocessing techniques
-        # 1. Noise reduction
-        denoised = cv2.fastNlMeansDenoising(gray, None, 10, 7, 21)
+        # 1. Noise reduction with bilateral filter for better edge preservation
+        denoised = cv2.bilateralFilter(gray, 9, 75, 75)
 
         # 2. Adaptive thresholding with optimized parameters
         binary = cv2.adaptiveThreshold(
-            denoised, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2
+            denoised, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 15, 8
         )
 
-        # 3. Enhanced contrast
-        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
+        # 3. Enhanced contrast with optimized parameters
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
         enhanced = clahe.apply(binary)
-
-        # 4. Deskewing if needed
-        coords = np.column_stack(np.where(enhanced > 0))
-        angle = cv2.minAreaRect(coords)[-1]
-        if angle < -45:
-            angle = 90 + angle
-        if abs(angle) > 0.5:  # Only rotate if skew is significant
-            (h, w) = enhanced.shape[:2]
-            center = (w // 2, h // 2)
-            M = cv2.getRotationMatrix2D(center, angle, 1.0)
-            enhanced = cv2.warpAffine(enhanced, M, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
-
-        # 5. Morphological operations for better text clarity
-        kernel = np.ones((2,2), np.uint8)
-        enhanced = cv2.morphologyEx(enhanced, cv2.MORPH_CLOSE, kernel)
 
         # Convert back to PIL Image
         enhanced_pil = Image.fromarray(enhanced)
@@ -160,44 +137,46 @@ def detect_bill_type(text):
         'consumo fatturato', 'oneri di sistema', 'servizio elettrico'
     ]
 
-    # Count occurrences of terms with improved context analysis
-    gas_count = 0
-    electricity_count = 0
-
     try:
         # Split text into sections for better context
         sections = text.split('\n\n')  # Split by double newline to get logical sections
 
+        # Initialize counters and found terms
+        gas_found = []
+        electricity_found = []
+
         for section in sections:
             # Check for gas terms
             section_gas_terms = [term for term in gas_terms if term in section]
-            if section_gas_terms:
-                gas_count += len(section_gas_terms)
-                logging.debug(f"Found gas terms in section: {section_gas_terms}")
+            gas_found.extend(section_gas_terms)
 
             # Check for electricity terms
             section_electricity_terms = [term for term in electricity_terms if term in section]
-            if section_electricity_terms:
-                electricity_count += len(section_electricity_terms)
-                logging.debug(f"Found electricity terms in section: {section_electricity_terms}")
+            electricity_found.extend(section_electricity_terms)
+
+        # Count unique terms found
+        unique_gas_terms = len(set(gas_found))
+        unique_electricity_terms = len(set(electricity_found))
 
         # Log detailed findings
-        logging.info(f"Gas terms found: {gas_count}")
-        logging.info(f"Electricity terms found: {electricity_count}")
+        logging.info(f"Unique gas terms found: {unique_gas_terms}")
+        logging.info(f"Gas terms: {set(gas_found)}")
+        logging.info(f"Unique electricity terms found: {unique_electricity_terms}")
+        logging.info(f"Electricity terms: {set(electricity_found)}")
 
         # Enhanced decision logic with weighted scoring
-        if gas_count > 0 and electricity_count > 0:
+        if unique_gas_terms > 0 and unique_electricity_terms > 0:
             logging.info("Detected bill type: MIX (contains both gas and electricity terms)")
             return 'MIX'
-        elif gas_count > electricity_count:
+        elif unique_gas_terms > 0:
             logging.info("Detected bill type: GAS")
             return 'GAS'
-        elif electricity_count > gas_count:
+        elif unique_electricity_terms > 0:
             logging.info("Detected bill type: LUCE")
             return 'LUCE'
-        elif gas_count == 0 and electricity_count == 0:
-            logging.warning("No relevant terms found in the text")
-            return 'UNKNOWN'
+
+        logging.warning("No relevant terms found in the text")
+        return 'UNKNOWN'
 
     except Exception as e:
         logging.exception("Error in detect_bill_type")
@@ -217,40 +196,50 @@ def process_bill_ocr(file_path):
             logging.error(f"File is not readable: {file_path}")
             raise PermissionError(f"File is not readable: {file_path}")
 
-        # Process PDF or image
         text = ""
+
+        # Process PDF or image
         if file_path.lower().endswith('.pdf'):
             try:
                 logging.info("Converting PDF to images")
-                # Process only first 2 pages for better performance
-                images = convert_from_path(file_path, dpi=200, first_page=1, last_page=2)
+                # Increased DPI and process more pages for better accuracy
+                images = convert_from_path(file_path, dpi=400, first_page=1, last_page=3)
 
                 if not images:
                     logging.error("Failed to convert PDF to images")
                     raise ValueError("Failed to convert PDF to images")
 
-                # Process limited pages with timeout
                 successful_pages = 0
                 for page_num, image in enumerate(images, 1):
                     try:
                         logging.info(f"Processing page {page_num}/{len(images)}")
-                        processed_image = preprocess_image(image)
 
-                        with timeout(20):  # 20 seconds timeout per page
-                            custom_config = r'--oem 3 --psm 6 -l ita+eng'
-                            page_text = pytesseract.image_to_string(processed_image, config=custom_config)
+                        # Resize image if too large
+                        width, height = image.size
+                        if width > 2000 or height > 2000:
+                            ratio = min(2000/width, 2000/height)
+                            new_size = (int(width * ratio), int(height * ratio))
+                            image = image.resize(new_size, Image.Resampling.LANCZOS)
+
+                        processed_image = preprocess_image(image)
+                        page_text = process_image_with_timeout(processed_image, timeout_seconds=45)
+
+                        if page_text.strip():  # Only add non-empty text
                             text += page_text + "\n"
                             successful_pages += 1
-                            logging.debug(f"Successfully processed page {page_num}")
+                            logging.info(f"Successfully processed page {page_num}")
+                            logging.debug(f"Sample text from page {page_num}: {page_text[:200]}")
+                        else:
+                            logging.warning(f"No text extracted from page {page_num}")
 
                     except OCRTimeoutError:
                         logging.warning(f"OCR timeout on page {page_num}, continuing with extracted text")
-                        if successful_pages > 0:  # If we have at least one page processed, continue
+                        if successful_pages > 0:
                             break
                         continue
                     except Exception as e:
                         logging.error(f"Error processing page {page_num}: {str(e)}")
-                        if successful_pages > 0:  # If we have at least one page processed, continue
+                        if successful_pages > 0:
                             break
                         continue
 
@@ -260,17 +249,29 @@ def process_bill_ocr(file_path):
             except Exception as e:
                 logging.exception("Error processing PDF")
                 raise RuntimeError(f"PDF processing failed: {str(e)}")
+
         else:
             try:
                 logging.info("Processing image file")
                 image = Image.open(file_path)
                 if image.mode != 'RGB':
                     image = image.convert('RGB')
-                processed_image = preprocess_image(image)
 
-                with timeout(30):  # 30 seconds timeout for single image
-                    custom_config = r'--oem 3 --psm 6 -l ita+eng'
-                    text = pytesseract.image_to_string(processed_image, config=custom_config)
+                # Resize image if too large
+                width, height = image.size
+                if width > 2000 or height > 2000:
+                    ratio = min(2000/width, 2000/height)
+                    new_size = (int(width * ratio), int(height * ratio))
+                    image = image.resize(new_size, Image.Resampling.LANCZOS)
+
+                processed_image = preprocess_image(image)
+                text = process_image_with_timeout(processed_image, timeout_seconds=45)
+
+                if not text.strip():
+                    raise ValueError("No text could be extracted from the image")
+
+                logging.info("Successfully processed image file")
+                logging.debug(f"Sample text extracted: {text[:200]}")
 
             except OCRTimeoutError:
                 logging.error("OCR timeout processing image")
@@ -283,18 +284,22 @@ def process_bill_ocr(file_path):
             logging.error("No text extracted from file")
             raise ValueError("No text could be extracted from the file")
 
-        # Extract bill type first
+        # Extract bill type and cost per unit with more detailed logging
+        logging.info("Starting bill type detection")
         bill_type = detect_bill_type(text)
+        logging.info(f"Detected bill type: {bill_type}")
+
         if bill_type == 'UNKNOWN':
             logging.warning("Could not determine bill type")
             raise ValueError("Could not determine bill type")
 
-        # Extract cost per unit
+        logging.info("Starting cost extraction")
         cost_per_unit = extract_cost_per_unit(text)
+        logging.info(f"Extracted cost per unit: {cost_per_unit}")
+
         if cost_per_unit is None:
             logging.warning("Could not extract cost per unit")
 
-        logging.info(f"Successfully processed bill - Type: {bill_type}, Cost per unit: {cost_per_unit}")
         return cost_per_unit, bill_type
 
     except Exception as e:
