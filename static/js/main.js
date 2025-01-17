@@ -171,6 +171,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     async function processBillOCR(file, index) {
         try {
+            console.log('Starting OCR processing for file:', file.name);
             const worker = await Tesseract.createWorker({
                 logger: m => console.log(m)
             });
@@ -182,14 +183,27 @@ document.addEventListener('DOMContentLoaded', function() {
             if (file.type.startsWith('image/')) {
                 const { data: { text } } = await worker.recognize(file);
                 billTypes[index] = detectBillType(text);
-                updateBillTypesInput();
-                console.log('OCR completed, bill type:', billTypes[index]);
+            } else if (file.type === 'application/pdf') {
+                // For PDFs, we'll use the preview canvas that was already generated
+                const previewItem = document.querySelector(`.preview-item[data-index="${index}"] img`);
+                if (previewItem) {
+                    const { data: { text } } = await worker.recognize(previewItem);
+                    billTypes[index] = detectBillType(text);
+                } else {
+                    billTypes[index] = 'UNKNOWN';
+                }
             }
 
+            updateBillTypesInput();
+            console.log('OCR completed for file:', file.name, 'bill type:', billTypes[index]);
+
             await worker.terminate();
+            return true;
         } catch (error) {
             console.error('OCR Error:', error);
-            // Don't show OCR errors to user, just log them
+            billTypes[index] = 'UNKNOWN';
+            updateBillTypesInput();
+            return false;
         }
     }
 
@@ -210,14 +224,30 @@ document.addEventListener('DOMContentLoaded', function() {
 
         if (!validateForm()) return;
 
-        const formData = new FormData();
-        formData.append('phone', phoneInput.value);
-        formData.append('billTypes', document.getElementById('billTypes').value);
-        uploadedFiles.forEach((file, index) => {
-            formData.append('files[]', file);
+        // Wait for all OCR processes to complete
+        const ocrPromises = uploadedFiles.map((file, index) => {
+            if (!billTypes[index]) {
+                return processBillOCR(file, index);
+            }
+            return Promise.resolve(true);
         });
 
         try {
+            await Promise.all(ocrPromises);
+
+            const billTypesArray = uploadedFiles.map((_, index) => billTypes[index] || 'UNKNOWN');
+            if (billTypesArray.some(type => !type || type === 'UNKNOWN')) {
+                showAlert('warning', 'Alcuni tipi di bollette non sono stati riconosciuti correttamente. Continuare comunque?');
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('phone', phoneInput.value);
+            formData.append('billTypes', JSON.stringify(billTypesArray));
+            uploadedFiles.forEach((file, index) => {
+                formData.append('files[]', file);
+            });
+
             const response = await fetch('/upload', {
                 method: 'POST',
                 body: formData
