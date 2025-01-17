@@ -29,6 +29,8 @@ app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
 }
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16MB max-size per file
 app.config["UPLOAD_FOLDER"] = "uploads"
+app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
+app.config["PERMANENT_SESSION_LIFETIME"] = 120  # 120 seconds timeout
 
 # Ensure upload directory exists with correct permissions
 uploads_dir = os.path.join(os.getcwd(), app.config["UPLOAD_FOLDER"])
@@ -41,7 +43,7 @@ if not os.path.exists(uploads_dir):
 
 db.init_app(app)
 
-def process_file_with_timeout(file_path, timeout_seconds=30):
+def process_file_with_timeout(file_path, timeout_seconds=60):  # Increased timeout
     """Process a file with a global timeout"""
     with ThreadPoolExecutor(max_workers=1) as executor:
         future = executor.submit(process_bill_ocr, file_path)
@@ -145,7 +147,7 @@ def upload():
                 # Process with OCR using timeout
                 logging.info(f"Starting OCR processing for: {file_path}")
                 try:
-                    cost_per_unit, detected_type = process_file_with_timeout(file_path)
+                    cost_per_unit, detected_type = process_file_with_timeout(file_path, timeout_seconds=60)
                     logging.info(f"OCR results - Cost per unit: {cost_per_unit}, Type: {detected_type}")
 
                     # Create new bill record

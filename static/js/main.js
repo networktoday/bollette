@@ -193,22 +193,33 @@ document.addEventListener('DOMContentLoaded', function() {
 
             // Set timeout for the entire request
             const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 60000); // 60 second timeout
+            const timeout = setTimeout(() => controller.abort(), 120000); // Increased to 120 seconds
 
             console.log('Sending POST request to /upload');
             try {
                 const response = await fetch('/upload', {
                     method: 'POST',
                     body: formData,
-                    signal: controller.signal
+                    signal: controller.signal,
+                    headers: {
+                        'Accept': 'application/json'
+                    },
+                    timeout: 120000 // 120 seconds timeout
                 });
 
                 clearTimeout(timeout);
                 console.log('Received response:', response.status);
 
                 if (!response.ok) {
-                    const errorData = await response.json().catch(() => ({ error: 'Errore di rete' }));
-                    throw new Error(errorData.error || `Errore HTTP: ${response.status}`);
+                    let errorMessage;
+                    try {
+                        const errorData = await response.json();
+                        errorMessage = errorData.error || `HTTP Error: ${response.status}`;
+                    } catch (jsonError) {
+                        console.error('Error parsing error response:', jsonError);
+                        errorMessage = `Network error (Status: ${response.status})`;
+                    }
+                    throw new Error(errorMessage);
                 }
 
                 const result = await response.json();
@@ -231,11 +242,10 @@ document.addEventListener('DOMContentLoaded', function() {
                     showAlert('danger', result.error || 'Caricamento fallito');
                 }
             } catch (error) {
+                console.error('Upload error:', error);
                 if (error.name === 'AbortError') {
-                    console.error('Request timed out');
                     showAlert('danger', 'Timeout - L\'elaborazione sta richiedendo troppo tempo. Riprova con meno file o file più piccoli.');
                 } else {
-                    console.error('Upload error:', error);
                     showAlert('danger', 'Errore durante il caricamento: ' + error.message);
                 }
             }
