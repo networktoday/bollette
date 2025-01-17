@@ -272,31 +272,49 @@ document.addEventListener('DOMContentLoaded', function() {
         e.preventDefault();
         console.log('Form submit started');
 
-        if (!validateForm()) {
-            console.log('Form validation failed');
-            return;
-        }
-
-        // Wait for all OCR processes to complete
-        console.log('Starting OCR processes');
-        const ocrPromises = uploadedFiles.map((file, index) => {
-            if (!billTypes[index]) {
-                return processBillOCR(file, index);
-            }
-            return Promise.resolve(true);
-        });
-
         try {
+            if (!validateForm()) {
+                console.log('Form validation failed');
+                return;
+            }
+
+            // Disable submit button to prevent double submission
+            const submitButton = form.querySelector('button[type="submit"]');
+            submitButton.disabled = true;
+
+            showAlert('info', 'Elaborazione in corso...');
+
+            console.log('Starting OCR processes');
+            const ocrPromises = uploadedFiles.map((file, index) => {
+                if (!billTypes[index]) {
+                    console.log(`Starting OCR for file ${index + 1}:`, file.name);
+                    return processBillOCR(file, index).catch(error => {
+                        console.error(`OCR failed for file ${file.name}:`, error);
+                        return false;
+                    });
+                }
+                return Promise.resolve(true);
+            });
+
             console.log('Waiting for OCR completion');
-            await Promise.all(ocrPromises);
+            const ocrResults = await Promise.all(ocrPromises);
+
+            if (ocrResults.some(result => !result)) {
+                console.error('Some OCR processes failed');
+                showAlert('danger', 'Errore durante l\'elaborazione di alcuni file');
+                submitButton.disabled = false;
+                return;
+            }
 
             const billTypesArray = uploadedFiles.map((_, index) => billTypes[index] || 'UNKNOWN');
             console.log('Bill types:', billTypesArray);
 
             if (billTypesArray.some(type => !type || type === 'UNKNOWN')) {
                 console.log('Unknown bill types detected');
-                showAlert('warning', 'Alcuni tipi di bollette non sono stati riconosciuti correttamente. Continuare comunque?');
-                return;
+                if (!confirm('Alcuni tipi di bollette non sono stati riconosciuti correttamente. Vuoi continuare comunque?')) {
+                    submitButton.disabled = false;
+                    return;
+                }
             }
 
             console.log('Creating FormData');
@@ -330,6 +348,10 @@ document.addEventListener('DOMContentLoaded', function() {
         } catch (error) {
             console.error('Upload error:', error);
             showAlert('danger', 'Si è verificato un errore durante il caricamento');
+        } finally {
+            // Re-enable submit button
+            const submitButton = form.querySelector('button[type="submit"]');
+            submitButton.disabled = false;
         }
     });
 
