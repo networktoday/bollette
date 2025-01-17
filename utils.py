@@ -34,7 +34,7 @@ def detect_bill_type(text):
     electricity_terms = [
         'electricity', 'electric', 'kw', 'kwh', 'kilowatt',
         'energia elettrica', 'consumo energia', 'luce', 'elettricità',
-        'potenza', 'lettura energia'
+        'potenza', 'lettura energia', 'energia', 'corrente elettrica'
     ]
 
     # Count occurrences of terms
@@ -43,6 +43,7 @@ def detect_bill_type(text):
 
     logging.debug(f"Bill detection - Gas terms found: {gas_count}, Electricity terms found: {electricity_count}")
 
+    # If we find any combination of gas and electricity terms, it's a MIX bill
     if gas_count > 0 and electricity_count > 0:
         logging.debug("Bill type detected: MIX (contains both gas and electricity terms)")
         return 'MIX'
