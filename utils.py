@@ -1,45 +1,78 @@
 import re
 import logging
 import os
+import cv2
+import numpy as np
 from PIL import Image
 import pytesseract
 from pdf2image import convert_from_path
 
+def preprocess_image(image):
+    """
+    Pre-process the image to improve OCR accuracy
+    """
+    logging.info("Starting image pre-processing")
+    try:
+        # Convert PIL Image to cv2 format
+        if isinstance(image, Image.Image):
+            image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+
+        # Convert to grayscale
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+        # Apply thresholding to get black and white image
+        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+        # Noise removal
+        denoised = cv2.fastNlMeansDenoising(binary)
+
+        # Increase contrast
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+        enhanced = clahe.apply(denoised)
+
+        # Convert back to PIL Image
+        enhanced_pil = Image.fromarray(enhanced)
+
+        logging.info("Image pre-processing completed successfully")
+        return enhanced_pil
+    except Exception as e:
+        logging.exception("Error during image pre-processing")
+        return None
+
 def extract_cost_per_unit(text):
-    """Extract cost per unit from OCR text"""
+    """Extract cost per unit from OCR text with improved pattern matching"""
     logging.debug("Extracting cost per unit from text")
     if not text:
         logging.error("Empty text provided to extract_cost_per_unit")
         return None
 
-    # Regular expressions for cost extraction
-    kw_pattern = r'(\d+[.,]\d*)\s*(?:\/|\s+per\s+)?\s*(?:kw|kwh)'
-    cubic_meter_pattern = r'(\d+[.,]\d*)\s*(?:\/|\s+per\s+)?\s*(?:m³|mc)'
+    # More comprehensive patterns for cost extraction
+    patterns = [
+        # Standard format with currency
+        r'(?:€|EUR)?\s*(\d+[.,]\d*)\s*(?:\/|\s+per\s+)?\s*(?:kw|kwh|m³|mc)',
+        # Format without currency
+        r'(\d+[.,]\d*)\s*(?:\/|\s+per\s+)?\s*(?:kw|kwh|m³|mc)',
+        # Format with text description
+        r'(?:costo|prezzo|tariffa)\s+(?:unitario|per)?\s+(?:€|EUR)?\s*(\d+[.,]\d*)',
+    ]
 
     try:
-        # Try to find cost per KW
-        kw_match = re.search(kw_pattern, text, re.IGNORECASE)
-        if kw_match:
-            cost = float(kw_match.group(1).replace(',', '.'))
-            logging.debug(f"Found kW cost: {cost}")
-            return cost
-
-        # Try to find cost per cubic meter
-        cubic_match = re.search(cubic_meter_pattern, text, re.IGNORECASE)
-        if cubic_match:
-            cost = float(cubic_match.group(1).replace(',', '.'))
-            logging.debug(f"Found cubic meter cost: {cost}")
-            return cost
+        for pattern in patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                cost = float(match.group(1).replace(',', '.'))
+                logging.debug(f"Found cost: {cost} using pattern: {pattern}")
+                return cost
 
         logging.warning("No cost per unit found in text")
-        logging.debug(f"Text analyzed: {text[:200]}...")  # Log first 200 chars
+        logging.debug(f"Text analyzed: {text[:200]}...")
         return None
     except Exception as e:
         logging.exception(f"Error extracting cost per unit from text: {str(e)}")
         return None
 
 def detect_bill_type(text):
-    """Detect bill type from OCR text"""
+    """Detect bill type from OCR text with improved keyword matching"""
     logging.debug("Detecting bill type from text")
     if not text:
         logging.error("Empty text provided to detect_bill_type")
@@ -47,44 +80,49 @@ def detect_bill_type(text):
 
     text = text.lower()
 
-    # Define Italian and English terms for each type
+    # Enhanced keyword sets for better detection
     gas_terms = [
         'gas', 'consumo gas', 'lettura gas', 'fornitura gas',
-        'gas naturale', 'metano', 'm³', 'mc', 'metri cubi'
+        'gas naturale', 'metano', 'm³', 'mc', 'metri cubi',
+        'gas metano', 'consumo di gas', 'metro cubo',
+        'consumi gas', 'contatore gas'
     ]
     electricity_terms = [
         'energia elettrica', 'consumo energia', 'luce', 'elettricità',
         'potenza', 'lettura energia', 'energia', 'corrente elettrica',
-        'kw', 'kwh', 'kilowatt'
+        'kw', 'kwh', 'kilowatt', 'consumo elettrico', 'contatore luce',
+        'enel', 'eni luce', 'consumo di energia'
     ]
 
-    # Count occurrences of terms
-    gas_count = sum(1 for term in gas_terms if term in text)
-    electricity_count = sum(1 for term in electricity_terms if term in text)
+    # Count weighted occurrences (more specific terms have higher weight)
+    gas_score = sum(2 if term in ['gas naturale', 'metano', 'consumo gas'] else 1 
+                   for term in gas_terms if term in text)
+    electricity_score = sum(2 if term in ['energia elettrica', 'consumo energia'] else 1 
+                          for term in electricity_terms if term in text)
 
-    logging.debug(f"Gas terms found: {gas_count}, terms: {[t for t in gas_terms if t in text]}")
-    logging.debug(f"Electricity terms found: {electricity_count}, terms: {[t for t in electricity_terms if t in text]}")
+    logging.debug(f"Gas score: {gas_score}, terms found: {[t for t in gas_terms if t in text]}")
+    logging.debug(f"Electricity score: {electricity_score}, terms found: {[t for t in electricity_terms if t in text]}")
 
-    if gas_count > 0 and electricity_count > 0:
+    if gas_score > 0 and electricity_score > 0:
         logging.info("Detected bill type: MIX (both gas and electricity terms found)")
         return 'MIX'
-    elif gas_count > 0:
+    elif gas_score > 0:
         logging.info("Detected bill type: GAS")
         return 'GAS'
-    elif electricity_count > 0:
+    elif electricity_score > 0:
         logging.info("Detected bill type: LUCE")
         return 'LUCE'
 
     logging.warning("Could not determine bill type")
-    logging.debug(f"Text analyzed: {text[:200]}...")  # Log first 200 chars
+    logging.debug(f"Text analyzed: {text[:200]}...")
     return 'UNKNOWN'
 
 def process_bill_ocr(file_path):
-    """Process bill file with OCR and extract information"""
+    """Process bill file with OCR using improved image processing"""
     try:
         logging.info(f"Starting OCR processing for file: {file_path}")
 
-        # Check if file exists and is readable
+        # Validate file
         if not os.path.exists(file_path):
             logging.error(f"File not found: {file_path}")
             return None, None
@@ -93,7 +131,6 @@ def process_bill_ocr(file_path):
             logging.error(f"File is not readable: {file_path}")
             return None, None
 
-        # Get file size
         file_size = os.path.getsize(file_path)
         logging.debug(f"Processing file of size: {file_size} bytes")
 
@@ -101,7 +138,7 @@ def process_bill_ocr(file_path):
         if file_path.lower().endswith('.pdf'):
             try:
                 logging.info("Converting PDF to image")
-                # Use higher DPI for better quality
+                # Increased DPI for better quality
                 images = convert_from_path(file_path, dpi=300, first_page=1, last_page=1)
                 if not images:
                     logging.error("Failed to convert PDF to image")
@@ -115,7 +152,6 @@ def process_bill_ocr(file_path):
             try:
                 logging.info("Opening image file")
                 image = Image.open(file_path)
-                # Convert to RGB if needed
                 if image.mode != 'RGB':
                     image = image.convert('RGB')
                 logging.info(f"Image opened successfully: size={image.size}, mode={image.mode}")
@@ -123,35 +159,35 @@ def process_bill_ocr(file_path):
                 logging.exception("Error opening image file")
                 return None, None
 
-        # Configure pytesseract for better accuracy
+        # Pre-process the image
+        processed_image = preprocess_image(image)
+        if processed_image is None:
+            logging.error("Image pre-processing failed")
+            return None, None
+
+        # Perform OCR with multiple attempts
         try:
-            # Configure tesseract to use Italian language
-            custom_config = r'--oem 3 --psm 6'
             logging.info("Starting OCR text extraction")
 
-            # Get tesseract version for debugging
-            try:
-                version = pytesseract.get_tesseract_version()
-                logging.info(f"Tesseract version: {version}")
-            except:
-                logging.warning("Could not get Tesseract version")
+            # Configure tesseract for better accuracy
+            custom_config = r'--oem 3 --psm 6'
 
-            # Log available languages
-            try:
-                langs = pytesseract.get_languages()
-                logging.info(f"Available languages: {langs}")
-            except:
-                logging.warning("Could not get available languages")
+            # Try different approaches
+            text = None
+            for psm in [6, 3, 4]:  # Different page segmentation modes
+                try:
+                    config = f'--oem 3 --psm {psm}'
+                    current_text = pytesseract.image_to_string(processed_image, config=config)
+                    if current_text.strip():
+                        text = current_text
+                        logging.info(f"Successful OCR with PSM {psm}")
+                        break
+                except Exception as e:
+                    logging.warning(f"OCR attempt failed with PSM {psm}: {str(e)}")
+                    continue
 
-            # Try with Italian first, if it fails try with just English
-            try:
-                text = pytesseract.image_to_string(image, lang='ita', config=custom_config)
-            except:
-                logging.warning("Failed with Italian language, trying English")
-                text = pytesseract.image_to_string(image, config=custom_config)
-
-            if not text.strip():
-                logging.error("OCR produced no text")
+            if not text:
+                logging.error("All OCR attempts failed")
                 return None, None
 
             text_length = len(text)
