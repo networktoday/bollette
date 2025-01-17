@@ -104,41 +104,44 @@ def detect_bill_type(text):
 
     text = text.lower()
 
-    # Enhanced keyword sets for better detection
+    # Define Italian and English terms for each type
     gas_terms = [
-        'gas', 'consumo gas', 'lettura gas', 'fornitura gas',
-        'gas naturale', 'metano', 'm³', 'mc', 'metri cubi',
-        'gas metano', 'consumo di gas', 'metro cubo',
-        'consumi gas', 'contatore gas'
+        'gas', 'cubic meter', 'm³', 'mc', 'metano', 'consumo gas',
+        'lettura gas', 'fornitura gas', 'gas naturale', 'smc', 'standard m³',
+        'metri cubi', 'metro cubo', 'materia gas', 'importi gas',
+        'consumi gas', 'bolletta gas', 'gas naturale', 'riepilogo gas',
+        'spesa materia gas', 'consumo metri cubi'
     ]
     electricity_terms = [
+        'electricity', 'electric', 'kw', 'kwh', 'kilowatt',
         'energia elettrica', 'consumo energia', 'luce', 'elettricità',
         'potenza', 'lettura energia', 'energia', 'corrente elettrica',
-        'kw', 'kwh', 'kilowatt', 'consumo elettrico', 'contatore luce',
-        'enel', 'eni luce', 'consumo di energia'
+        'materia energia', 'importi energia', 'riepilogo energia',
+        'spesa energia', 'f1', 'f2', 'f3', 'fascia oraria'
     ]
 
-    # Count weighted occurrences (more specific terms have higher weight)
-    gas_score = sum(2 if term in ['gas naturale', 'metano', 'consumo gas'] else 1 
-                   for term in gas_terms if term in text)
-    electricity_score = sum(2 if term in ['energia elettrica', 'consumo energia'] else 1 
-                          for term in electricity_terms if term in text)
+    # Count occurrences of terms
+    gas_count = sum(1 for term in gas_terms if term in text)
+    electricity_count = sum(1 for term in electricity_terms if term in text)
 
-    logging.debug(f"Gas score: {gas_score}, terms found: {[t for t in gas_terms if t in text]}")
-    logging.debug(f"Electricity score: {electricity_score}, terms found: {[t for t in electricity_terms if t in text]}")
+    # Log found terms for debugging
+    logging.debug(f"Gas terms found: {gas_count}")
+    logging.debug(f"Found gas terms: {[term for term in gas_terms if term in text]}")
+    logging.debug(f"Electricity terms found: {electricity_count}")
+    logging.debug(f"Found electricity terms: {[term for term in electricity_terms if term in text]}")
 
-    if gas_score > 0 and electricity_score > 0:
-        logging.info("Detected bill type: MIX (both gas and electricity terms found)")
+    # If we find any combination of gas and electricity terms, it's a MIX bill
+    if gas_count > 0 and electricity_count > 0:
+        logging.info("Detected bill type: MIX (contains both gas and electricity terms)")
         return 'MIX'
-    elif gas_score > 0:
+    elif gas_count > 0:
         logging.info("Detected bill type: GAS")
         return 'GAS'
-    elif electricity_score > 0:
+    elif electricity_count > 0:
         logging.info("Detected bill type: LUCE")
         return 'LUCE'
 
     logging.warning("Could not determine bill type")
-    logging.debug(f"Text analyzed: {text[:200]}...")
     return 'UNKNOWN'
 
 def process_bill_ocr(file_path):
