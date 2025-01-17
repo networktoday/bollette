@@ -70,39 +70,76 @@ document.addEventListener('DOMContentLoaded', function() {
 
     function displayPreview(file) {
         console.log('Displaying preview for:', file.name);
-        const reader = new FileReader();
-
-        reader.onload = function(e) {
-            console.log('FileReader loaded successfully');
-            preview.innerHTML = `
-                <div class="preview-item">
-                    <img src="${e.target.result}" alt="Anteprima" class="preview-image">
-                    <button type="button" class="btn btn-danger btn-sm delete-preview" onclick="document.getElementById('preview').innerHTML = '';">
-                        <i class="fas fa-trash"></i>
-                    </button>
-                </div>
-            `;
-        };
-
-        reader.onerror = function(e) {
-            console.error('FileReader error:', e);
-            showAlert('danger', 'Errore durante la lettura del file');
-        };
 
         if (file.type.startsWith('image/')) {
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                console.log('FileReader loaded successfully');
+                preview.innerHTML = createPreviewHTML(e.target.result, 'image');
+            };
+            reader.onerror = function(e) {
+                console.error('FileReader error:', e);
+                showAlert('danger', 'Errore durante la lettura del file');
+            };
             reader.readAsDataURL(file);
         } else if (file.type === 'application/pdf') {
-            // For PDFs, show a generic icon
-            preview.innerHTML = `
-                <div class="preview-item">
-                    <i class="fas fa-file-pdf fa-3x text-danger"></i>
-                    <p class="mt-2">${file.name}</p>
-                    <button type="button" class="btn btn-danger btn-sm delete-preview" onclick="document.getElementById('preview').innerHTML = '';">
-                        <i class="fas fa-trash"></i>
-                    </button>
-                </div>
-            `;
+            const reader = new FileReader();
+            reader.onload = async function(e) {
+                try {
+                    const typedarray = new Uint8Array(e.target.result);
+                    const pdf = await pdfjsLib.getDocument(typedarray).promise;
+                    const page = await pdf.getPage(1);
+                    const viewport = page.getViewport({ scale: 0.5 });
+
+                    // Create canvas for PDF rendering
+                    const canvas = document.createElement('canvas');
+                    canvas.height = viewport.height;
+                    canvas.width = viewport.width;
+
+                    // Render PDF page to canvas
+                    await page.render({
+                        canvasContext: canvas.getContext('2d'),
+                        viewport: viewport
+                    }).promise;
+
+                    preview.innerHTML = createPreviewHTML(canvas.toDataURL(), 'pdf');
+                } catch (error) {
+                    console.error('PDF preview error:', error);
+                    // Fallback to PDF icon if preview fails
+                    preview.innerHTML = createPreviewHTML(null, 'pdf-fallback', file.name);
+                }
+            };
+            reader.onerror = function(e) {
+                console.error('FileReader error:', e);
+                showAlert('danger', 'Errore durante la lettura del file');
+            };
+            reader.readAsArrayBuffer(file);
         }
+    }
+
+    function createPreviewHTML(src, type, filename = '') {
+        let previewContent = '';
+        switch (type) {
+            case 'image':
+                previewContent = `<img src="${src}" alt="Anteprima" class="preview-image">`;
+                break;
+            case 'pdf':
+                previewContent = `<img src="${src}" alt="Anteprima PDF" class="preview-image">`;
+                break;
+            case 'pdf-fallback':
+                previewContent = `
+                    <i class="fas fa-file-pdf fa-3x text-danger"></i>
+                    <p class="mt-2">${filename}</p>`;
+                break;
+        }
+
+        return `
+            <div class="preview-item">
+                ${previewContent}
+                <button type="button" class="btn btn-danger btn-sm delete-preview" onclick="document.getElementById('preview').innerHTML = '';">
+                    <i class="fas fa-trash"></i>
+                </button>
+            </div>`;
     }
 
     async function processBillOCR(file) {
