@@ -172,32 +172,81 @@ document.addEventListener('DOMContentLoaded', function() {
     async function processBillOCR(file, index) {
         try {
             console.log('Starting OCR processing for file:', file.name);
-            const worker = await Tesseract.createWorker({
-                logger: m => console.log(m)
-            });
+            let fullText = '';
 
-            await worker.load();
-            await worker.loadLanguage('eng');
-            await worker.initialize('eng');
+            if (file.type === 'application/pdf') {
+                const reader = new FileReader();
+                const pdfData = await new Promise((resolve, reject) => {
+                    reader.onload = e => resolve(e.target.result);
+                    reader.onerror = e => reject(e);
+                    reader.readAsArrayBuffer(file);
+                });
 
-            if (file.type.startsWith('image/')) {
-                const { data: { text } } = await worker.recognize(file);
-                billTypes[index] = detectBillType(text);
-            } else if (file.type === 'application/pdf') {
-                // For PDFs, we'll use the preview canvas that was already generated
-                const previewItem = document.querySelector(`.preview-item[data-index="${index}"] img`);
-                if (previewItem) {
-                    const { data: { text } } = await worker.recognize(previewItem);
-                    billTypes[index] = detectBillType(text);
-                } else {
-                    billTypes[index] = 'UNKNOWN';
+                // Load PDF
+                const pdf = await pdfjsLib.getDocument(new Uint8Array(pdfData)).promise;
+                const numPages = pdf.numPages;
+                console.log(`Processing PDF with ${numPages} pages`);
+
+                // Process each page
+                for (let pageNum = 1; pageNum <= numPages; pageNum++) {
+                    console.log(`Processing page ${pageNum}/${numPages}`);
+                    const page = await pdf.getPage(pageNum);
+                    const viewport = page.getViewport({ scale: 2.0 }); // Higher scale for better OCR
+
+                    const canvas = document.createElement('canvas');
+                    canvas.height = viewport.height;
+                    canvas.width = viewport.width;
+                    const context = canvas.getContext('2d');
+
+                    await page.render({
+                        canvasContext: context,
+                        viewport: viewport
+                    }).promise;
+
+                    // Process this page with Tesseract
+                    const worker = await Tesseract.createWorker({
+                        logger: m => console.log(m)
+                    });
+
+                    await worker.load();
+                    await worker.loadLanguage('ita+eng');
+                    await worker.initialize('ita+eng');
+                    await worker.setParameters({
+                        tessedit_char_whitelist: '0123456789.,ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz$/kWm³',
+                        preserve_interword_spaces: '1',
+                        tessedit_ocr_engine_mode: '3',
+                        tessedit_pageseg_mode: '6'
+                    });
+
+                    const { data: { text } } = await worker.recognize(canvas);
+                    fullText += text + '\n';
+                    await worker.terminate();
                 }
+            } else if (file.type.startsWith('image/')) {
+                const worker = await Tesseract.createWorker({
+                    logger: m => console.log(m)
+                });
+
+                await worker.load();
+                await worker.loadLanguage('ita+eng');
+                await worker.initialize('ita+eng');
+                await worker.setParameters({
+                    tessedit_char_whitelist: '0123456789.,ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz$/kWm³',
+                    preserve_interword_spaces: '1',
+                    tessedit_ocr_engine_mode: '3',
+                    tessedit_pageseg_mode: '6'
+                });
+
+                const { data: { text } } = await worker.recognize(file);
+                fullText = text;
+                await worker.terminate();
             }
 
+            // Analyze the complete text from all pages
+            billTypes[index] = detectBillType(fullText);
             updateBillTypesInput();
             console.log('OCR completed for file:', file.name, 'bill type:', billTypes[index]);
-
-            await worker.terminate();
+            console.log('Full text extracted:', fullText.substring(0, 500) + '...');
             return true;
         } catch (error) {
             console.error('OCR Error:', error);
