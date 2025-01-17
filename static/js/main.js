@@ -5,9 +5,8 @@ document.addEventListener('DOMContentLoaded', function() {
     const form = document.getElementById('upload-form');
     const phoneInput = document.getElementById('phone');
 
-    // Store uploaded files and their bill types
+    // Store uploaded files
     let uploadedFiles = [];
-    let billTypes = {};
 
     // Drag and drop handling
     ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
@@ -49,12 +48,9 @@ document.addEventListener('DOMContentLoaded', function() {
 
     function handleFiles(files) {
         files.forEach(file => {
-            console.log('File selected:', file.name, file.type);
             if (validateFile(file)) {
                 uploadedFiles.push(file);
                 displayPreview(file, uploadedFiles.length - 1);
-                // Process OCR in background
-                setTimeout(() => processBillOCR(file, uploadedFiles.length - 1), 100);
             }
         });
     }
@@ -73,12 +69,9 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     function displayPreview(file, index) {
-        console.log('Displaying preview for:', file.name);
-
         if (file.type.startsWith('image/')) {
             const reader = new FileReader();
             reader.onload = function(e) {
-                console.log('FileReader loaded successfully');
                 appendPreviewHTML(createPreviewHTML(e.target.result, 'image', index));
             };
             reader.onerror = function(e) {
@@ -109,10 +102,6 @@ document.addEventListener('DOMContentLoaded', function() {
                     console.error('PDF preview error:', error);
                     appendPreviewHTML(createPreviewHTML(null, 'pdf-fallback', index, file.name));
                 }
-            };
-            reader.onerror = function(e) {
-                console.error('FileReader error:', e);
-                showAlert('danger', 'Errore durante la lettura del file');
             };
             reader.readAsArrayBuffer(file);
         }
@@ -152,8 +141,6 @@ document.addEventListener('DOMContentLoaded', function() {
     // Add this function to the global scope for the onclick handler
     window.removeFile = function(index) {
         uploadedFiles = uploadedFiles.filter((_, i) => i !== index);
-        delete billTypes[index];
-        updateBillTypesInput();
         refreshPreviews();
     };
 
@@ -162,106 +149,6 @@ document.addEventListener('DOMContentLoaded', function() {
         uploadedFiles.forEach((file, index) => {
             displayPreview(file, index);
         });
-    }
-
-    function updateBillTypesInput() {
-        const types = uploadedFiles.map((_, index) => billTypes[index] || 'UNKNOWN');
-        document.getElementById('billTypes').value = JSON.stringify(types);
-    }
-
-    async function processBillOCR(file, index) {
-        try {
-            console.log('Starting OCR processing for file:', file.name);
-            let fullText = '';
-
-            if (file.type === 'application/pdf') {
-                const reader = new FileReader();
-                const pdfData = await new Promise((resolve, reject) => {
-                    reader.onload = e => resolve(e.target.result);
-                    reader.onerror = e => reject(e);
-                    reader.readAsArrayBuffer(file);
-                });
-
-                // Load PDF
-                const pdf = await pdfjsLib.getDocument(new Uint8Array(pdfData)).promise;
-                const numPages = pdf.numPages;
-                console.log(`Processing PDF with ${numPages} pages`);
-
-                // Process each page
-                for (let pageNum = 1; pageNum <= numPages; pageNum++) {
-                    console.log(`Processing page ${pageNum}/${numPages}`);
-                    const page = await pdf.getPage(pageNum);
-                    const viewport = page.getViewport({ scale: 2.0 }); // Higher scale for better OCR
-
-                    const canvas = document.createElement('canvas');
-                    canvas.height = viewport.height;
-                    canvas.width = viewport.width;
-                    const context = canvas.getContext('2d');
-
-                    await page.render({
-                        canvasContext: context,
-                        viewport: viewport
-                    }).promise;
-
-                    // Process this page with Tesseract
-                    const worker = await Tesseract.createWorker({
-                        logger: m => console.log(m)
-                    });
-
-                    await worker.load();
-                    await worker.loadLanguage('ita+eng');
-                    await worker.initialize('ita+eng');
-                    await worker.setParameters({
-                        tessedit_char_whitelist: '0123456789.,ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz$/kWm³',
-                        preserve_interword_spaces: '1',
-                        tessedit_ocr_engine_mode: '3',
-                        tessedit_pageseg_mode: '6'
-                    });
-
-                    const { data: { text } } = await worker.recognize(canvas);
-                    fullText += text + '\n';
-                    await worker.terminate();
-                }
-            } else if (file.type.startsWith('image/')) {
-                const worker = await Tesseract.createWorker({
-                    logger: m => console.log(m)
-                });
-
-                await worker.load();
-                await worker.loadLanguage('ita+eng');
-                await worker.initialize('ita+eng');
-                await worker.setParameters({
-                    tessedit_char_whitelist: '0123456789.,ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz$/kWm³',
-                    preserve_interword_spaces: '1',
-                    tessedit_ocr_engine_mode: '3',
-                    tessedit_pageseg_mode: '6'
-                });
-
-                const { data: { text } } = await worker.recognize(file);
-                fullText = text;
-                await worker.terminate();
-            }
-
-            // Analyze the complete text from all pages
-            billTypes[index] = detectBillType(fullText);
-            updateBillTypesInput();
-            console.log('OCR completed for file:', file.name, 'bill type:', billTypes[index]);
-            console.log('Full text extracted:', fullText.substring(0, 500) + '...');
-            return true;
-        } catch (error) {
-            console.error('OCR Error:', error);
-            billTypes[index] = 'UNKNOWN';
-            updateBillTypesInput();
-            return false;
-        }
-    }
-
-    function detectBillType(text) {
-        text = text.toLowerCase();
-        if (text.includes('gas') && text.includes('electricity')) return 'MIX';
-        if (text.includes('gas')) return 'GAS';
-        if (text.includes('electricity') || text.includes('kw')) return 'LUCE';
-        return 'UNKNOWN';
     }
 
     phoneInput.addEventListener('input', function() {
@@ -274,7 +161,6 @@ document.addEventListener('DOMContentLoaded', function() {
 
         try {
             if (!validateForm()) {
-                console.log('Form validation failed');
                 return;
             }
 
@@ -292,33 +178,14 @@ document.addEventListener('DOMContentLoaded', function() {
                 return;
             }
 
-            console.log('Creating FormData');
             const formData = new FormData();
             formData.append('phone', phoneInput.value);
 
-            // Add files to FormData first
-            console.log('Adding files to FormData');
-            let validFiles = true;
+            // Add files to FormData
             uploadedFiles.forEach((file, index) => {
-                try {
-                    console.log(`Adding file ${index + 1}/${uploadedFiles.length}:`, file.name);
-                    formData.append('files[]', file);
-                } catch (error) {
-                    console.error(`Error adding file ${file.name}:`, error);
-                    validFiles = false;
-                }
+                console.log(`Adding file ${index + 1}/${uploadedFiles.length}:`, file.name);
+                formData.append('files[]', file);
             });
-
-            if (!validFiles) {
-                showAlert('danger', 'Errore durante la preparazione dei file');
-                submitButton.disabled = false;
-                return;
-            }
-
-            // Add bill types
-            const billTypesArray = uploadedFiles.map((_, index) => billTypes[index] || 'UNKNOWN');
-            console.log('Bill types:', billTypesArray);
-            formData.append('billTypes', JSON.stringify(billTypesArray));
 
             console.log('Sending POST request to /upload');
             const response = await fetch('/upload', {
@@ -379,7 +246,5 @@ document.addEventListener('DOMContentLoaded', function() {
         form.reset();
         preview.innerHTML = '';
         uploadedFiles = [];
-        billTypes = {};
-        updateBillTypesInput();
     }
 });

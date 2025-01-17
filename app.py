@@ -3,9 +3,8 @@ from flask import Flask, render_template, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.orm import DeclarativeBase
 import logging
-import json
-from werkzeug.utils import secure_filename
 import uuid
+from werkzeug.utils import secure_filename
 from utils import process_bill_ocr
 
 # Configure logging
@@ -65,35 +64,20 @@ def upload():
             return jsonify({"error": "No form data received"}), 400
 
         phone = request.form.get("phone")
-        bill_types_raw = request.form.get("billTypes")
-
-        logging.info(f"Received phone: {phone}")
-        logging.info(f"Received bill types raw: {bill_types_raw}")
-
-        if not bill_types_raw:
-            logging.error("No bill types received")
-            return jsonify({"error": "No bill types received"}), 400
-
-        try:
-            bill_types = json.loads(bill_types_raw)
-        except json.JSONDecodeError as e:
-            logging.error(f"Error parsing bill types: {str(e)}")
-            return jsonify({"error": "Invalid bill types format"}), 400
+        if not phone:
+            logging.error("No phone number received")
+            return jsonify({"error": "No phone number received"}), 400
 
         files = request.files.getlist("files[]")
         logging.info(f"Received {len(files)} files")
 
-        if not phone or not files:
-            logging.error("Missing required fields")
-            return jsonify({"error": "Missing required fields"}), 400
-
-        if len(files) != len(bill_types):
-            logging.error(f"Mismatch between files ({len(files)}) and bill types ({len(bill_types)})")
-            return jsonify({"error": "Mismatch between files and bill types"}), 400
+        if not files:
+            logging.error("No files received")
+            return jsonify({"error": "No files received"}), 400
 
         # Process each file
         saved_bills = []
-        for i, (file, bill_type) in enumerate(zip(files, bill_types)):
+        for i, file in enumerate(files):
             try:
                 if not file or not file.filename:
                     logging.error(f"Invalid file at index {i}")
@@ -113,47 +97,51 @@ def upload():
                 cost_per_unit, detected_type = process_bill_ocr(file_path)
                 logging.info(f"OCR results - Cost per unit: {cost_per_unit}, Detected type: {detected_type}")
 
-                # Use detected type if available, otherwise use client-side type
-                final_type = detected_type if detected_type and detected_type != 'UNKNOWN' else bill_type
-                logging.info(f"Using bill type: {final_type}")
+                if detected_type == 'UNKNOWN':
+                    logging.warning(f"Could not detect bill type for file: {file.filename}")
+                    continue
 
                 # Create new bill record
                 bill = models.Bill(
                     phone=phone,
-                    bill_type=final_type,
+                    bill_type=detected_type,
                     file_path=file_path,
                     cost_per_unit=cost_per_unit
                 )
                 db.session.add(bill)
                 saved_bills.append(bill)
+                logging.info(f"Bill record created for file: {file.filename}")
+
             except Exception as e:
                 logging.error(f"Error processing file {file.filename if file else 'unknown'}: {str(e)}")
                 continue
 
         if not saved_bills:
             logging.error("No bills were successfully processed")
-            return jsonify({"error": "No bills were successfully processed"}), 500
+            return jsonify({"error": "Nessuna bolletta è stata elaborata correttamente"}), 400
 
         # Commit all bills to database
         logging.info("Committing bills to database")
         try:
             db.session.commit()
+            logging.info(f"Successfully saved {len(saved_bills)} bills to database")
         except Exception as e:
             logging.error(f"Database commit error: {str(e)}")
             db.session.rollback()
-            return jsonify({"error": "Failed to save bills to database"}), 500
+            return jsonify({"error": "Errore nel salvare le bollette nel database"}), 500
 
-        # Return success response with bill IDs
+        # Return success response with bill details
         response_data = {
             "success": True,
-            "message": "Bills uploaded successfully",
+            "message": "Bollette caricate con successo",
             "bills": [bill.to_dict() for bill in saved_bills]
         }
         logging.info("Upload completed successfully")
         return jsonify(response_data)
+
     except Exception as e:
         logging.error(f"Upload error: {str(e)}")
-        return jsonify({"error": "Upload failed", "details": str(e)}), 500
+        return jsonify({"error": "Si è verificato un errore durante il caricamento"}), 500
 
 with app.app_context():
     import models
